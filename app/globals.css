@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+/* Popup של StoryMap: בלי המסגרת הלבנה של Mapbox — הכרטיס מעוצב בתוך הרכיב */
+.storymap-popup .mapboxgl-popup-content {
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 1rem;
+}
+.storymap-popup .mapboxgl-popup-tip {
+  border-top-color: #0a0a0a !important;
+  border-bottom-color: #0a0a0a !important;
+}
+.storymap-popup {
+  z-index: 50;
+}
+
+/* כפתורי השליטה של Mapbox מעל ה-bottom sheet במובייל */
+@media (max-width: 767px) {
+  .mapboxgl-ctrl-bottom-left {
+    bottom: calc(4.5rem + env(safe-area-inset-bottom));
+  }
+}
