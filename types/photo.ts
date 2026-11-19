@@ -24,9 +24,20 @@ export interface Photo {
   tags: string[];
   is_private: boolean;
   created_at: string;
+
+  /** טקסט הפוסט (סיכות מה-Planner) */
+  story: string | null;
+  /** כל תמונות הסיכה לפי הסדר; ריק בתמונות שהועלו מהאפליקציה (משתמשים ב-photo_url) */
+  image_urls: string[];
+  storage_provider: "supabase" | "r2";
+  storage_keys: string[];
+  /** 'app' | 'maxbi-planner' */
+  source: string;
+  external_id: string | null;
 }
 
-export type PhotoInsert = Omit<Photo, "id" | "created_at">;
+type DbDefaulted = "story" | "image_urls" | "storage_provider" | "storage_keys" | "source" | "external_id";
+export type PhotoInsert = Omit<Photo, "id" | "created_at" | DbDefaulted> & Partial<Pick<Photo, DbDefaulted>>;
 
 /** מה שחולץ מה-EXIF — הכל אופציונלי, כי הרבה קבצים חסרים חלק מהשדות */
 export interface ExtractedExif {

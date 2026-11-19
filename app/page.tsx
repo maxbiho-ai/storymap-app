@@ -1,12 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { MapProvider, useMap } from "react-map-gl";
 import PhotoSearchBar from "@/components/PhotoSearchBar";
 import PhotoUploader from "@/components/PhotoUploader";
 import FloatingGallery from "@/components/gallery/FloatingGallery";
 import PhotoDrawer from "@/components/map/PhotoDrawer";
+import AuthButton from "@/components/auth/AuthButton";
+import AuthModal from "@/components/auth/AuthModal";
+import { useAuth } from "@/hooks/useAuth";
+import { getSupabase } from "@/lib/supabase/client";
 import { usePhotoSearch } from "@/hooks/usePhotoSearch";
 import { useMapStore, padBounds } from "@/store/mapStore";
 import { MAP_ID } from "@/components/map/constants";
@@ -30,6 +34,10 @@ function StoryMap() {
   const { [MAP_ID]: map } = useMap();
   const [filters, setFilters] = useState<PhotoFilters>({ query: "", tags: [] });
   const [uploadOpen, setUploadOpen] = useState(false);
+  const { user, loading: authLoading, signOut } = useAuth();
+  const [authOpen, setAuthOpen] = useState(false);
+  // אורח שלחץ "העלאה": אחרי התחברות פאנל ההעלאה נפתח אוטומטית
+  const [uploadAfterLogin, setUploadAfterLogin] = useState(false);
 
   const bounds = useMapStore((s) => s.bounds);
   const pickMode = useMapStore((s) => s.pickMode);
@@ -47,6 +55,46 @@ function StoryMap() {
   const { photos, loading, error, refresh } = usePhotoSearch(query);
 
   const selectedPhoto = selectedId ? photos.find((p) => p.id === selectedId) : undefined;
+
+  // התחברות/התנתקות משנה מה RLS מחזיר (תמונות פרטיות): טוענים מחדש
+  const userId = user?.id ?? null;
+  useEffect(() => {
+    refresh();
+    if (!userId) setUploadOpen(false);
+    else if (uploadAfterLogin) {
+      setUploadOpen(true);
+      setUploadAfterLogin(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  // קישור ישיר לסיכה (pinUrl מה-API): /?pin=<id> → טיסה לסיכה ופתיחת הכרטיסייה
+  const deepLinkDone = useRef(false);
+  useEffect(() => {
+    if (!map || deepLinkDone.current) return;
+    const pinId = new URLSearchParams(window.location.search).get("pin");
+    if (!pinId) return;
+    deepLinkDone.current = true;
+    getSupabase()
+      .from("photos")
+      .select("id, latitude, longitude")
+      .eq("id", pinId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!data) return;
+        map.flyTo({ center: [data.longitude, data.latitude], zoom: 14, duration: 2500, essential: true });
+        select(data.id); // הכרטיסייה תיפתח ברגע שהסיכה תיטען עם ה-bounds החדשים
+      });
+  }, [map, select]);
+
+  const toggleUpload = () => {
+    if (!user) {
+      setUploadAfterLogin(true);
+      setAuthOpen(true);
+      return;
+    }
+    setUploadOpen((o) => !o);
+  };
 
   const onUploaded = (p: Photo) => {
     refresh();
@@ -75,12 +123,15 @@ function StoryMap() {
         </div>
         <button
           type="button"
-          onClick={() => setUploadOpen((o) => !o)}
+          onClick={toggleUpload}
           className="pointer-events-auto flex h-11 shrink-0 items-center gap-2 rounded-2xl bg-amber-300 px-4 text-sm font-semibold text-neutral-900 shadow-lg hover:bg-amber-200"
         >
           <span className="text-lg leading-none">+</span>
           <span className="hidden sm:inline">העלאה</span>
         </button>
+        <div className="pointer-events-auto">
+          <AuthButton user={user} loading={authLoading} onLogin={() => { setUploadAfterLogin(false); setAuthOpen(true); }} onSignOut={signOut} />
+        </div>
       </header>
 
       <FloatingGallery photos={photos} loading={loading} />
@@ -110,6 +161,10 @@ function StoryMap() {
           onReset={() => setPicked(null)}
         />
       </div>
+      <AuthModal
+        open={authOpen}
+        onClose={() => setAuthOpen(false)}
+      />
     </main>
   );
 }

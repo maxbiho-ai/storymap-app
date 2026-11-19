@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Photo } from "@/types/photo";
 import { getTimeOfDay, TIME_OF_DAY_LABEL } from "@/lib/timeOfDay";
 import TimeIcon from "./TimeIcon";
@@ -27,15 +28,37 @@ export default function PhotoCard({ photo, onClose }: { photo: Photo; onClose: (
   const camera = cameraLine(photo);
   const exposure = exposureLine(photo);
   const ratio = photo.width && photo.height ? photo.width / photo.height : 3 / 2;
+  const images = photo.image_urls?.length ? photo.image_urls : [photo.photo_url];
+  const [idx, setIdx] = useState(0);
+  const [storyOpen, setStoryOpen] = useState(false);
+  useEffect(() => { setIdx(0); setStoryOpen(false); }, [photo.id]);
+  const go = (d: number) => setIdx((i) => (i + d + images.length) % images.length);
 
   return (
     <div dir="rtl" className="overflow-hidden rounded-2xl bg-neutral-950 text-neutral-100">
       <div className="relative max-h-[50dvh]" style={{ aspectRatio: String(Math.max(ratio, 0.8)) }}>
         {/* thumb כ-placeholder מיידי, ומעליו התמונה המלאה */}
+        {idx === 0 && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={photo.thumb_url ?? photo.photo_url} alt="" className="absolute inset-0 h-full w-full scale-105 object-cover blur-sm" />
+        )}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={photo.thumb_url ?? photo.photo_url} alt="" className="absolute inset-0 h-full w-full scale-105 object-cover blur-sm" />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={photo.photo_url} alt={photo.title ?? ""} className="absolute inset-0 h-full w-full object-cover" />
+        <img key={images[idx]} src={images[idx]} alt={photo.title ?? ""} className="absolute inset-0 h-full w-full bg-neutral-900 object-cover" />
+        {images.length > 1 && (
+          <>
+            {/* ב-RTL: החץ הימני = הקודמת */}
+            <button type="button" onClick={() => go(-1)} aria-label="התמונה הקודמת"
+              className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur hover:bg-black/70">›</button>
+            <button type="button" onClick={() => go(1)} aria-label="התמונה הבאה"
+              className="absolute left-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur hover:bg-black/70">‹</button>
+            <div className="absolute inset-x-0 bottom-2 z-10 flex justify-center gap-1.5">
+              {images.map((u, i) => (
+                <button key={u} type="button" onClick={() => setIdx(i)} aria-label={`תמונה ${i + 1}`}
+                  className={`h-1.5 rounded-full transition-all ${i === idx ? "w-4 bg-white" : "w-1.5 bg-white/50"}`} />
+              ))}
+            </div>
+          </>
+        )}
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-neutral-950 to-transparent" />
         <button
           type="button"
@@ -58,6 +81,19 @@ export default function PhotoCard({ photo, onClose }: { photo: Photo; onClose: (
           <h3 className="text-base font-semibold leading-tight">{photo.location_name ?? photo.title ?? "ללא שם"}</h3>
           {photo.location_name && photo.title && <p className="text-sm text-neutral-400">{photo.title}</p>}
         </div>
+
+        {photo.story && (
+          <div>
+            <p className={`whitespace-pre-line text-sm leading-relaxed text-neutral-200 ${storyOpen ? "" : "line-clamp-4"}`}>
+              {photo.story}
+            </p>
+            {photo.story.length > 220 && (
+              <button type="button" onClick={() => setStoryOpen((o) => !o)} className="mt-1 text-xs text-amber-300 hover:underline">
+                {storyOpen ? "הצג פחות" : "קרא עוד"}
+              </button>
+            )}
+          </div>
+        )}
 
         {photo.taken_at && (
           <p className="text-xs text-neutral-400">
