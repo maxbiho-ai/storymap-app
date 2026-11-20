@@ -23,5 +23,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: `texts must be an array (max ${MAX_TEXTS})` }, { status: 400 });
   }
   const texts = body.texts.map((t) => (typeof t === "string" ? t.slice(0, MAX_LEN) : ""));
-  return NextResponse.json(await aiTranslate(texts));
+  try {
+    return NextResponse.json(await aiTranslate(texts));
+  } catch (err) {
+    console.error("[api/ai/translate] fallback:", err);
+    return NextResponse.json({ texts, translated: false });
+  }
 }

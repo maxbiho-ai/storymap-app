@@ -14,7 +14,9 @@ function r2(): S3Client {
   if (client) return client;
   client = new S3Client({
     region: "auto",
-    endpoint: `https://${serverEnv.r2AccountId()}.r2.cloudflarestorage.com`,
+    // R2_ENDPOINT: optional, e.g. https://<account>.eu.r2.cloudflarestorage.com for EU buckets
+    endpoint: process.env.R2_ENDPOINT || `https://${serverEnv.r2AccountId()}.r2.cloudflarestorage.com`,
+    forcePathStyle: Boolean(process.env.R2_ENDPOINT),
     credentials: {
       accessKeyId: serverEnv.r2AccessKeyId(),
       secretAccessKey: serverEnv.r2SecretAccessKey(),

@@ -5,7 +5,7 @@ import { getSupabaseAdmin } from "./supabaseAdmin";
 import { r2Put, r2PublicUrl, r2DeleteAll } from "./r2";
 import { serverEnv } from "./env";
 import { resolveTakenAt, timezoneAt } from "@/lib/time";
-import { aiTags, aiTitle, aiTranslate, splitStoryHashtags } from "./ai";
+import { aiTags, aiTitle, aiTranslate, splitStoryHashtags, timeBasedTags } from "./ai";
 
 /** Photographer for planner pins when the payload has none (override with EXTERNAL_DEFAULT_PHOTOGRAPHER) */
 const DEFAULT_PHOTOGRAPHER = "Max Bihovskiy";
@@ -244,9 +244,17 @@ export async function createExternalPin(input: PublishInput): Promise<CreatedPin
 
   // --- Same AI pipeline as browser uploads (runs in parallel, never blocks the pin) ---
   // Hashtags at the end of a social post become tags, not story text
-  const { text: storyText, hashtags } = splitStoryHashtags(input.story);
+  // allSettled + per-step fallback: a Gemini error (404 model, 429, timeout, bad JSON)
+  // never fails the request. The pin is saved with the original title/story and time-based tags.
+  let storyText = input.story;
+  let hashtags: string[] = [];
+  try {
+    ({ text: storyText, hashtags } = splitStoryHashtags(input.story));
+  } catch (err) {
+    console.error("[external-publish] hashtag split failed, keeping story as is:", err);
+  }
   const thumbB64 = processed[0].thumb.toString("base64");
-  const [translation, tagged, generatedTitle] = await Promise.all([
+  const [translationR, taggedR, titleR] = await Promise.allSettled([
     aiTranslate([storyText ?? "", input.title ?? ""]),
     aiTags(
       {
@@ -263,7 +271,19 @@ export async function createExternalPin(input: PublishInput): Promise<CreatedPin
     // A title the planner sent is translated, not replaced; otherwise generate 4-7 words
     input.title ? Promise.resolve(null) : aiTitle({ story: storyText, imageB64: thumbB64, locationName: input.locationName }),
   ]);
-  const story = translation.texts[0]?.trim() || null;
+  const settled = { translation: translationR, tags: taggedR, title: titleR };
+  for (const [step, r] of Object.entries(settled)) {
+    if (r.status === "rejected") console.error(`[external-publish] AI ${step} failed, using fallback:`, r.reason);
+  }
+  const translation =
+    translationR.status === "fulfilled" ? translationR.value : { texts: [storyText ?? "", input.title ?? ""], translated: false };
+  const tagged =
+    taggedR.status === "fulfilled"
+      ? taggedR.value
+      : timeBasedTags({ takenAt: taken.taken_at, lat: input.lat, lng: input.lng }, [...input.tags, ...hashtags]);
+  const generatedTitle = titleR.status === "fulfilled" ? titleR.value : null;
+
+  const story = translation.texts[0]?.trim() || storyText || null;
   const title = input.title ? translation.texts[1]?.trim() || input.title : generatedTitle;
   const tags = tagged.tags;
 

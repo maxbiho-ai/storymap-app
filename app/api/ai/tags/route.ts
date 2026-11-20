@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getRequestUserId } from "@/lib/server/userAuth";
-import { aiTags } from "@/lib/server/ai";
+import { aiTags, timeBasedTags } from "@/lib/server/ai";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,13 +27,20 @@ export async function POST(req: Request) {
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
-  const { tags, phase, ai } = await aiTags({
+  const input = {
     imageB64: str(body.image),
     takenAt: str(body.takenAt),
     lat: num(body.lat),
     lng: num(body.lng),
     locationName: str(body.locationName),
     title: str(body.title),
-  });
-  return NextResponse.json({ tags, timeOfDay: phase, ai });
+  };
+  try {
+    const { tags, phase, ai } = await aiTags(input);
+    return NextResponse.json({ tags, timeOfDay: phase, ai });
+  } catch (err) {
+    console.error("[api/ai/tags] fallback:", err);
+    const { tags, phase } = timeBasedTags(input);
+    return NextResponse.json({ tags, timeOfDay: phase, ai: false });
+  }
 }

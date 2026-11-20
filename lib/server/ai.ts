@@ -65,6 +65,31 @@ export interface AiTagsInput {
  * The solar phase computed from EXIF time + GPS always wins over what the image "looks like".
  */
 export async function aiTags(input: AiTagsInput, extraTags: string[] = []): Promise<{ tags: string[]; phase: TimeOfDay | null; ai: boolean }> {
+  try {
+    return await aiTagsInner(input, extraTags);
+  } catch (err) {
+    console.error("[ai/tags] fallback to time-based tags:", err);
+    return timeBasedTags(input, extraTags);
+  }
+}
+
+/**
+ * No AI at all: the caller's tags + the solar phase tag (sunrise / sunset / night) from EXIF time + GPS.
+ * Used whenever Gemini is missing, down, or returns an error.
+ */
+export function timeBasedTags(input: Pick<AiTagsInput, "takenAt" | "lat" | "lng">, extraTags: string[] = []): { tags: string[]; phase: TimeOfDay | null; ai: false } {
+  const { lat, lng, takenAt } = input;
+  try {
+    const located = lat != null && lng != null;
+    const merged = sanitizeTags(extraTags, 30);
+    const tags = located ? reconcileTimeTags(merged, takenAt, lat, lng) : merged;
+    return { tags: sanitizeTags(tags, 15), phase: located ? getTimeOfDay(takenAt, lat, lng) : null, ai: false };
+  } catch {
+    return { tags: sanitizeTags(extraTags, 15), phase: null, ai: false };
+  }
+}
+
+async function aiTagsInner(input: AiTagsInput, extraTags: string[]): Promise<{ tags: string[]; phase: TimeOfDay | null; ai: boolean }> {
   const { lat, lng, takenAt } = input;
   const located = lat != null && lng != null;
   const phase = located ? getTimeOfDay(takenAt, lat, lng) : null;
@@ -125,6 +150,15 @@ const noLongDashes = (s: string) => s.replace(/\s*[—–]\s*/g, " - ");
 
 /** Translates every non-English item to natural English (same order). Returns originals on failure */
 export async function aiTranslate(texts: string[]): Promise<{ texts: string[]; translated: boolean }> {
+  try {
+    return await aiTranslateInner(texts);
+  } catch (err) {
+    console.error("[ai/translate] fallback to original text:", err);
+    return { texts, translated: false };
+  }
+}
+
+async function aiTranslateInner(texts: string[]): Promise<{ texts: string[]; translated: boolean }> {
   const todo = texts.map((t, i) => ({ t, i })).filter(({ t }) => t.trim() && !looksEnglish(t));
   if (!todo.length || !geminiConfigured()) return { texts, translated: false };
 
@@ -163,6 +197,15 @@ export async function aiTranslate(texts: string[]): Promise<{ texts: string[]; t
 
 /** A short English title (4–7 words) from the story and the image. null if the model is unavailable */
 export async function aiTitle(input: { story: string | null; imageB64?: string | null; locationName?: string | null; tags?: string[] }): Promise<string | null> {
+  try {
+    return await aiTitleInner(input);
+  } catch (err) {
+    console.error("[ai/title] fallback to no generated title:", err);
+    return null;
+  }
+}
+
+async function aiTitleInner(input: { story: string | null; imageB64?: string | null; locationName?: string | null; tags?: string[] }): Promise<string | null> {
   if (!geminiConfigured() || (!input.story && !input.imageB64)) return null;
 
   const prompt = [
