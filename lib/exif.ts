@@ -4,7 +4,8 @@ import type { ExtractedExif } from "@/types/photo";
 const EMPTY: ExtractedExif = {
   latitude: null,
   longitude: null,
-  taken_at: null,
+  taken_wall: null,
+  taken_offset: null,
   camera_make: null,
   camera_model: null,
   lens: null,
@@ -21,23 +22,14 @@ function formatShutter(seconds: number | undefined): string | null {
   return `1/${Math.round(1 / seconds)}`;
 }
 
-function toIso(d: unknown): string | null {
-  if (d instanceof Date && !Number.isNaN(d.getTime())) return d.toISOString();
-  return null;
-}
-
 /**
- * EXIF שומר שעון-קיר בלי אזור זמן, ו-exifr מפרש אותו לפי אזור הזמן של הדפדפן.
- * אם המצלמה כתבה OffsetTimeOriginal (+03:00) — בונים את הרגע המדויק,
- * כך שצילום באוגנדה שמועלה מישראל לא יזוז בשעה.
+ * exifr parses DateTimeOriginal as browser-local time; reading the local components
+ * back gives the camera's wall clock exactly as written ("2024-03-22T19:08:00").
  */
-function withOffset(d: unknown, offset: unknown): string | null {
+function wallClock(d: unknown): string | null {
   if (!(d instanceof Date) || Number.isNaN(d.getTime())) return null;
-  if (typeof offset !== "string" || !/^[+-]\d{2}:\d{2}$/.test(offset)) return d.toISOString();
   const p = (n: number) => String(n).padStart(2, "0");
-  const wall = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-  const fixed = new Date(wall + offset);
-  return Number.isNaN(fixed.getTime()) ? d.toISOString() : fixed.toISOString();
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 function cleanStr(v: unknown): string | null {
@@ -72,13 +64,14 @@ export async function extractExif(file: File): Promise<ExtractedExif> {
 
     const lat = typeof data.latitude === "number" ? data.latitude : null;
     const lng = typeof data.longitude === "number" ? data.longitude : null;
-    // 0,0 הוא כמעט תמיד GPS ריק ולא תמונה ממפרץ גינאה
+    // 0,0 is almost always an empty GPS block, not the Gulf of Guinea
     const hasGps = lat !== null && lng !== null && !(lat === 0 && lng === 0);
 
     return {
       latitude: hasGps ? lat : null,
       longitude: hasGps ? lng : null,
-      taken_at: withOffset(data.DateTimeOriginal, data.OffsetTimeOriginal) ?? toIso(data.CreateDate),
+      taken_wall: wallClock(data.DateTimeOriginal) ?? wallClock(data.CreateDate),
+      taken_offset: typeof data.OffsetTimeOriginal === "string" ? data.OffsetTimeOriginal.trim() : null,
       camera_make: cleanStr(data.Make),
       camera_model: cleanStr(data.Model),
       lens: cleanStr(data.LensModel),

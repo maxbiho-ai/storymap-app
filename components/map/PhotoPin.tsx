@@ -26,13 +26,13 @@ function PhotoPin({ photo, highlighted, selected, onHover, onSelect }: Props) {
       anchor="bottom"
       style={{ zIndex: active ? 20 : 1 }}
       onClick={(e) => {
-        e.originalEvent.stopPropagation(); // לא להפעיל את ה-click של המפה
+        e.originalEvent.stopPropagation(); // don't trigger the map click
         onSelect(photo.id);
       }}
     >
       <button
         type="button"
-        aria-label={photo.location_name ?? photo.title ?? "תמונה"}
+        aria-label={photo.location_name ?? photo.title ?? "Photo"}
         onMouseEnter={() => onHover(photo.id)}
         onMouseLeave={() => onHover(null)}
         className="group relative flex cursor-pointer flex-col items-center transition-transform duration-200 ease-out"

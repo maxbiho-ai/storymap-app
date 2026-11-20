@@ -6,17 +6,23 @@ import type { Photo, PhotoFilters } from "@/types/photo";
 
 const MAX_RESULTS = 500;
 
-/** מנקה תווים שבירים לפילטר or() של PostgREST ו-wildcards של ILIKE */
+/** Escapes ILIKE wildcards */
+export function escapeLike(s: string): string {
+  return s.replace(/[%_\\]/g, (c) => `\\${c}`);
+}
+
+/** Also strips characters that break PostgREST's or() syntax */
 function escapeForOr(s: string): string {
-  return s.replace(/[%_\\]/g, (c) => `\\${c}`).replace(/[,()"]/g, " ").trim();
+  return escapeLike(s).replace(/[,()"]/g, " ").trim();
 }
 
 /**
- * מביא תמונות לפי הסינון. RLS דואג שרק תמונות ציבוריות + שלי יחזרו.
- * - tags: contains → התמונה חייבת להכיל את *כל* התגיות שנבחרו
- * - query: ILIKE על location_name / title / tags (התאמה מדויקת לתגית)
- * - bounds: מגביל לאזור הנראה במפה
- * debounce של 300ms + ביטול תוצאות ישנות (race condition).
+ * Loads photos for the current filters. RLS returns only public photos + my own.
+ * - query:        location name / title (partial, case-insensitive) or an exact tag
+ * - tags:         contains → the photo must have *all* selected tags
+ * - photographer: exact name, case-insensitive
+ * - bounds:       the visible map area
+ * 300ms debounce, and stale responses are dropped.
  */
 export function usePhotoSearch(filters: PhotoFilters) {
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -40,30 +46,29 @@ export function usePhotoSearch(filters: PhotoFilters) {
         .limit(MAX_RESULTS);
 
       if (filters.tags.length) q = q.contains("tags", filters.tags);
+      if (filters.photographer) q = q.ilike("photographer_name", escapeLike(filters.photographer.trim()));
 
       const text = escapeForOr(filters.query);
       if (text) {
-        const tagGuess = text.replace(/^#/, "").toLowerCase().replace(/\s+/g, "");
+        const tagGuess = text.toLowerCase().replace(/\s+/g, "");
         q = q.or(
-          [
-            `location_name.ilike.%${text}%`,
-            `title.ilike.%${text}%`,
-            tagGuess && `tags.cs.{${tagGuess}}`,
-          ].filter(Boolean).join(","),
+          [`location_name.ilike.%${text}%`, `title.ilike.%${text}%`, tagGuess && `tags.cs.{${tagGuess}}`]
+            .filter(Boolean)
+            .join(","),
         );
       }
 
       if (filters.bounds) {
         const { north, south, east, west } = filters.bounds;
         q = q.gte("latitude", south).lte("latitude", north);
-        // מפה שחוצה את קו התאריך (west > east)
+        // Map crossing the date line (west > east)
         q = west <= east
           ? q.gte("longitude", west).lte("longitude", east)
           : q.or(`longitude.gte.${west},longitude.lte.${east}`);
       }
 
       const { data, error } = await q;
-      if (id !== reqId.current) return; // הגיעה בקשה חדשה יותר
+      if (id !== reqId.current) return; // a newer request is on its way
       if (error) setError(error.message);
       else setPhotos((data ?? []) as Photo[]);
       setLoading(false);
@@ -73,13 +78,13 @@ export function usePhotoSearch(filters: PhotoFilters) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
-  /** טעינה מחדש (למשל אחרי העלאה) */
+  /** Reload (e.g. after an upload) */
   const refresh = () => setNonce((n) => n + 1);
 
   return { photos, loading, error, refresh };
 }
 
-/** תגיות פופולריות להשלמה אוטומטית (מה-view popular_tags) */
+/** Popular tags for autocomplete (view popular_tags) */
 export function usePopularTags(limit = 30) {
   const [tags, setTags] = useState<{ tag: string; photo_count: number }[]>([]);
   useEffect(() => {
@@ -90,4 +95,17 @@ export function usePopularTags(limit = 30) {
       .then(({ data }) => setTags(data ?? []));
   }, [limit]);
   return tags;
+}
+
+/** Photographers for "@" autocomplete (view popular_photographers) */
+export function usePopularPhotographers(limit = 30) {
+  const [people, setPeople] = useState<{ name: string; photo_count: number }[]>([]);
+  useEffect(() => {
+    getSupabase()
+      .from("popular_photographers")
+      .select("name, photo_count")
+      .limit(limit)
+      .then(({ data }) => setPeople(data ?? []));
+  }, [limit]);
+  return people;
 }

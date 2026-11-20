@@ -5,15 +5,15 @@ import { getSupabase } from "@/lib/supabase/client";
 
 type Mode = "login" | "signup";
 
-/** הודעות השגיאה של Supabase Auth בעברית */
+/** Friendlier Supabase Auth error messages */
 function translateError(msg: string): string {
   const m = msg.toLowerCase();
-  if (m.includes("invalid login credentials")) return "אימייל או סיסמה שגויים";
-  if (m.includes("email not confirmed")) return "צריך לאשר את כתובת האימייל: בדוק את תיבת הדואר";
-  if (m.includes("already registered") || m.includes("already been registered")) return "כבר קיים חשבון עם האימייל הזה. נסה להתחבר";
-  if (m.includes("password should be at least")) return "הסיסמה קצרה מדי: לפחות 6 תווים";
-  if (m.includes("rate limit") || m.includes("too many")) return "יותר מדי ניסיונות. נסה שוב בעוד כמה דקות";
-  if (m.includes("invalid") && m.includes("email")) return "כתובת אימייל לא תקינה";
+  if (m.includes("invalid login credentials")) return "Wrong email or password";
+  if (m.includes("email not confirmed")) return "Please confirm your email first: check your inbox";
+  if (m.includes("already registered") || m.includes("already been registered")) return "An account with this email already exists. Try logging in";
+  if (m.includes("password should be at least")) return "Password is too short: at least 6 characters";
+  if (m.includes("rate limit") || m.includes("too many")) return "Too many attempts. Please try again in a few minutes";
+  if (m.includes("invalid") && m.includes("email")) return "Invalid email address";
   return msg;
 }
 
@@ -69,9 +69,9 @@ export default function AuthModal({ open, onClose, initialMode = "login" }: Prop
         });
         if (error) throw error;
         if (data.session) {
-          onClose(); // אימות אימייל כבוי בפרויקט: מחובר מיד
+          onClose(); // email confirmation is off in this project: signed in right away
         } else {
-          setNotice(`שלחנו מייל אימות ל-${email.trim()}. לחץ על הקישור שבו ואז התחבר.`);
+          setNotice(`We sent a confirmation email to ${email.trim()}. Click the link in it, then log in.`);
           setMode("login");
           setPassword("");
         }
@@ -88,7 +88,6 @@ export default function AuthModal({ open, onClose, initialMode = "login" }: Prop
 
   return (
     <div
-      dir="rtl"
       role="dialog"
       aria-modal="true"
       aria-labelledby="auth-title"
@@ -102,10 +101,10 @@ export default function AuthModal({ open, onClose, initialMode = "login" }: Prop
               STORY<span className="text-amber-300">MAP</span>
             </p>
             <h2 id="auth-title" className="mt-2 text-lg font-semibold">
-              {mode === "login" ? "התחברות" : "יצירת חשבון"}
+              {mode === "login" ? "Log in" : "Create account"}
             </h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="סגור" className="text-2xl leading-none text-neutral-500 hover:text-white">
+          <button type="button" onClick={onClose} aria-label="Close" className="text-2xl leading-none text-neutral-500 hover:text-white">
             ×
           </button>
         </div>
@@ -119,14 +118,14 @@ export default function AuthModal({ open, onClose, initialMode = "login" }: Prop
               onClick={() => { setMode(m); setError(null); }}
               className={`rounded-lg py-1.5 font-medium transition ${mode === m ? "bg-white text-neutral-900" : "text-neutral-400 hover:text-white"}`}
             >
-              {m === "login" ? "התחברות" : "הרשמה"}
+              {m === "login" ? "Log in" : "Sign up"}
             </button>
           ))}
         </div>
 
         <form onSubmit={submit} className="space-y-3">
           {mode === "signup" && (
-            <input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="שם מלא (אופציונלי)" autoComplete="name" className={input} />
+            <input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Full name (shown as photographer)" autoComplete="name" className={input} />
           )}
           <input
             ref={emailRef}
@@ -137,7 +136,7 @@ export default function AuthModal({ open, onClose, initialMode = "login" }: Prop
             onChange={(e) => setEmail(e.target.value)}
             placeholder="email@example.com"
             autoComplete="email"
-            className={`${input} text-left`}
+            className={input}
           />
           <input
             type="password"
@@ -146,9 +145,9 @@ export default function AuthModal({ open, onClose, initialMode = "login" }: Prop
             dir="ltr"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder={mode === "signup" ? "סיסמה (לפחות 6 תווים)" : "סיסמה"}
+            placeholder={mode === "signup" ? "Password (at least 6 characters)" : "Password"}
             autoComplete={mode === "login" ? "current-password" : "new-password"}
-            className={`${input} text-left placeholder:text-right`}
+            className={input}
           />
 
           {error && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</p>}
@@ -159,7 +158,7 @@ export default function AuthModal({ open, onClose, initialMode = "login" }: Prop
             disabled={busy}
             className="w-full rounded-xl bg-amber-300 py-2.5 text-sm font-semibold text-neutral-900 transition hover:bg-amber-200 disabled:opacity-50"
           >
-            {busy ? "רגע…" : mode === "login" ? "התחבר" : "צור חשבון"}
+            {busy ? "One moment…" : mode === "login" ? "Log in" : "Create account"}
           </button>
         </form>
       </div>

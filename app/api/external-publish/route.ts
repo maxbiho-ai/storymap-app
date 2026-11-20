@@ -5,14 +5,16 @@ import { errorResponse, unauthorized } from "@/lib/server/respond";
 
 export const runtime = "nodejs"; // sharp + AWS SDK
 export const dynamic = "force-dynamic";
-export const maxDuration = 60; // הורדה ועיבוד של עד 10 תמונות
+export const maxDuration = 60; // download + process up to 10 images + AI
 
 /**
  * POST /api/external-publish
  * Authorization: Bearer <EXTERNAL_PUBLISH_SECRET>
  * Body: { images[], lat, lng, locationName, capturedAt, exif{camera,lens,aperture,shutter,iso}, story,
- *         title?, tags?, postId? }
- * → 201 { ok: true, pinId, pinUrl }  (200 אם postId כבר פורסם)
+ *         photographerName? (default "Max Bihovskiy"), tags?, title?, postId? }
+ * Runs the same AI pipeline as app uploads: story/title → English, 4-7 word title if none,
+ * vision tags + sunrise/sunset time check, post hashtags → tags.
+ * → 201 { ok: true, pinId, pinUrl, title, tags, ai }  (200 if postId was already published)
  */
 export async function POST(req: Request) {
   if (!isAuthorized(req)) return unauthorized();
@@ -24,10 +26,18 @@ export async function POST(req: Request) {
       throw new HttpError(400, "Invalid JSON body");
     }
     const input = parsePublishBody(body);
-    const { pinId, existing } = await createExternalPin(input);
+    const pin = await createExternalPin(input);
     return NextResponse.json(
-      { ok: true, pinId, pinUrl: buildPinUrl(pinId, req), ...(existing ? { existing: true } : {}) },
-      { status: existing ? 200 : 201 },
+      {
+        ok: true,
+        pinId: pin.pinId,
+        pinUrl: buildPinUrl(pin.pinId, req),
+        title: pin.title,
+        tags: pin.tags,
+        ai: pin.ai,
+        ...(pin.existing ? { existing: true } : {}),
+      },
+      { status: pin.existing ? 200 : 201 },
     );
   } catch (err) {
     return errorResponse(err);

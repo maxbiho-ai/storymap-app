@@ -45,8 +45,7 @@ export default function FloatingGallery({ photos, loading }: Props) {
 
   return (
     <aside
-      dir="rtl"
-      aria-label="תמונות באזור"
+      aria-label="Photos in this area"
       className={`pointer-events-auto absolute z-10 flex flex-col overflow-hidden border border-white/10 bg-neutral-950/80 text-neutral-100 shadow-2xl backdrop-blur-xl transition-[height] duration-300
         inset-x-0 bottom-0 rounded-t-3xl ${open ? "h-[45dvh]" : "h-16"}
         md:inset-x-auto md:bottom-4 md:start-4 md:top-36 md:h-auto md:w-[340px] md:rounded-3xl ${open ? "" : "md:bottom-auto md:h-14"}`}
@@ -59,8 +58,8 @@ export default function FloatingGallery({ photos, loading }: Props) {
       >
         <span className="absolute inset-x-0 top-1.5 mx-auto h-1 w-10 rounded-full bg-white/20 md:hidden" />
         <span className="text-sm font-semibold">
-          באזור הזה
-          <span className="ms-2 font-normal text-neutral-400">{visible.length} תמונות</span>
+          In this area
+          <span className="ms-2 font-normal text-neutral-400">{visible.length} photo{visible.length === 1 ? "" : "s"}</span>
         </span>
         <span className="flex items-center gap-2">
           {loading && <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-white/70" />}
@@ -74,7 +73,7 @@ export default function FloatingGallery({ photos, loading }: Props) {
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
           {visible.length === 0 ? (
             <p className="px-2 py-10 text-center text-sm text-neutral-400">
-              {loading ? "טוען…" : "אין תמונות באזור הזה. הזז את המפה או התרחק."}
+              {loading ? "Loading…" : "No photos in this area. Move the map or zoom out."}
             </p>
           ) : (
             <ul className="grid grid-cols-3 gap-2 md:grid-cols-2">

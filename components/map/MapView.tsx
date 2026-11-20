@@ -81,7 +81,7 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
   if (!TOKEN) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-neutral-900 p-6 text-center text-sm text-neutral-300">
-        חסר NEXT_PUBLIC_MAPBOX_TOKEN ב-.env.local
+        NEXT_PUBLIC_MAPBOX_TOKEN is missing in .env.local
       </div>
     );
   }
@@ -102,8 +102,8 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
       attributionControl
       reuseMaps
     >
-      <NavigationControl position="bottom-left" showCompass={false} />
-      <GeolocateControl position="bottom-left" />
+      <NavigationControl position="bottom-right" showCompass={false} />
+      <GeolocateControl position="bottom-right" />
 
       {!pickMode && clusters.map((c) =>
         c.kind === "cluster" ? (
@@ -150,7 +150,7 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
           onDragEnd={(e) => setPicked({ latitude: e.lngLat.lat, longitude: e.lngLat.lng })}
           style={{ zIndex: 40 }}
         >
-          <svg width="34" height="44" viewBox="0 0 34 44" className="drop-shadow-lg" aria-label="מיקום התמונה החדשה">
+          <svg width="34" height="44" viewBox="0 0 34 44" className="drop-shadow-lg" aria-label="New photo location">
             <path d="M17 43C17 43 33 27 33 17A16 16 0 001 17c0 10 16 26 16 26z" fill="#fcd34d" stroke="white" strokeWidth="2.5" />
             <circle cx="17" cy="17" r="6" fill="#171717" />
           </svg>

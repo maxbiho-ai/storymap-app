@@ -34,7 +34,7 @@ export default function AuthButton({ user, loading, onLogin, onSignOut }: Props)
         <svg viewBox="0 0 20 20" className="h-4 w-4 fill-current" aria-hidden>
           <path d="M10 10a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0114 0H3z" />
         </svg>
-        <span className="hidden sm:inline">התחברות</span>
+        <span className="hidden sm:inline">Log in</span>
       </button>
     );
   }
@@ -45,24 +45,24 @@ export default function AuthButton({ user, loading, onLogin, onSignOut }: Props)
       <button
         type="button"
         onClick={() => setMenuOpen((o) => !o)}
-        aria-label="חשבון"
+        aria-label="Account"
         aria-expanded={menuOpen}
         className="flex h-11 w-11 items-center justify-center rounded-2xl bg-neutral-950/80 text-base font-bold uppercase text-amber-300 shadow-lg backdrop-blur hover:bg-neutral-900"
       >
         {name.charAt(0) || "?"}
       </button>
       {menuOpen && (
-        <div dir="rtl" className="absolute end-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-2xl border border-white/10 bg-neutral-950 text-sm text-neutral-100 shadow-2xl">
+        <div className="absolute end-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-2xl border border-white/10 bg-neutral-950 text-sm text-neutral-100 shadow-2xl">
           <div className="border-b border-white/10 px-4 py-3">
             {user.user_metadata?.full_name && <p className="font-medium">{user.user_metadata.full_name as string}</p>}
-            <p dir="ltr" className="truncate text-right text-xs text-neutral-400">{user.email}</p>
+            <p className="truncate text-xs text-neutral-400">{user.email}</p>
           </div>
           <button
             type="button"
             onClick={() => { setMenuOpen(false); onSignOut(); }}
             className="w-full px-4 py-2.5 text-start text-red-300 hover:bg-white/5"
           >
-            התנתקות
+            Log out
           </button>
         </div>
       )}

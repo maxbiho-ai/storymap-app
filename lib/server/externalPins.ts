@@ -4,6 +4,11 @@ import sharp from "sharp";
 import { getSupabaseAdmin } from "./supabaseAdmin";
 import { r2Put, r2PublicUrl, r2DeleteAll } from "./r2";
 import { serverEnv } from "./env";
+import { resolveTakenAt, timezoneAt } from "@/lib/time";
+import { aiTags, aiTitle, aiTranslate, splitStoryHashtags } from "./ai";
+
+/** Photographer for planner pins when the payload has none (override with EXTERNAL_DEFAULT_PHOTOGRAPHER) */
+const DEFAULT_PHOTOGRAPHER = "Max Bihovskiy";
 
 export const EXTERNAL_SOURCE = "maxbi-planner";
 const MAX_IMAGES = 10;
@@ -38,6 +43,7 @@ export interface PublishInput {
   story: string | null;
   /** אופציונליים: */
   title: string | null;
+  photographerName: string | null;
   tags: string[];
   postId: string | null;
 }
@@ -79,20 +85,22 @@ export function parsePublishBody(raw: unknown): PublishInput {
   if (lat == null || lat < -90 || lat > 90) throw new HttpError(400, "`lat` must be a number between -90 and 90");
   if (lng == null || lng < -180 || lng > 180) throw new HttpError(400, "`lng` must be a number between -180 and 180");
 
+  // "2024-03-22T19:08:00+01:00" / "...Z" → exact instant.
+  // "2024-03-22T19:08:00" (no offset) → wall-clock time at the pin's location, resolved later.
   let capturedAt: string | null = null;
   if (b.capturedAt != null && b.capturedAt !== "") {
-    const d = new Date(String(b.capturedAt));
+    const raw = String(b.capturedAt).trim().replace(" ", "T");
+    const d = new Date(raw);
     if (Number.isNaN(d.getTime())) throw new HttpError(400, "`capturedAt` is not a valid date");
-    capturedAt = d.toISOString();
+    capturedAt = /(Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? d.toISOString() : raw.slice(0, 19);
   }
 
   const e = (b.exif && typeof b.exif === "object" ? b.exif : {}) as Record<string, unknown>;
   const shutterRaw = e.shutter ?? e.shutterSpeed;
   const iso = num(e.iso);
 
-  const tags = Array.isArray(b.tags)
-    ? b.tags.filter((t): t is string => typeof t === "string").slice(0, 30)
-    : [];
+  if (b.tags != null && !Array.isArray(b.tags)) throw new HttpError(400, "`tags` must be an array of strings");
+  const tags = Array.isArray(b.tags) ? b.tags.filter((t): t is string => typeof t === "string").slice(0, 30) : [];
 
   return {
     images,
@@ -110,7 +118,8 @@ export function parsePublishBody(raw: unknown): PublishInput {
     },
     story: str(b.story, 10_000),
     title: str(b.title, 200),
-    tags, // הטריגר ב-DB מנרמל (lowercase, בלי #, בלי כפילויות)
+    photographerName: str(b.photographerName, 120),
+    tags, // merged with AI + story hashtags and sanitized in createExternalPin
     postId: b.postId == null ? null : str(String(b.postId), 200),
   };
 }
@@ -190,24 +199,73 @@ export function buildPinUrl(pinId: string, req: Request): string {
   return `${base}/?pin=${encodeURIComponent(pinId)}`;
 }
 
-export async function createExternalPin(input: PublishInput): Promise<{ pinId: string; existing: boolean }> {
+export interface CreatedPin {
+  pinId: string;
+  existing: boolean;
+  title: string | null;
+  tags: string[];
+  /** What the AI pipeline actually did (false = skipped or failed, pin still created) */
+  ai: { translated: boolean; titleGenerated: boolean; tagged: boolean };
+}
+
+export async function createExternalPin(input: PublishInput): Promise<CreatedPin> {
   const db = getSupabaseAdmin();
 
   // ניסיון חוזר עם אותו postId: מחזירים את הסיכה הקיימת במקום ליצור כפילות
   if (input.postId) {
     const { data } = await db
       .from("photos")
-      .select("id")
+      .select("id, title, tags")
       .eq("source", EXTERNAL_SOURCE)
       .eq("external_id", input.postId)
       .maybeSingle();
-    if (data) return { pinId: data.id as string, existing: true };
+    if (data) {
+      return {
+        pinId: data.id as string,
+        existing: true,
+        title: (data.title as string | null) ?? null,
+        tags: (data.tags as string[]) ?? [],
+        ai: { translated: false, titleGenerated: false, tagged: false },
+      };
+    }
   }
 
   // הורדה ועיבוד במקביל; כל כשל עוצר לפני שנכתב משהו
   const processed = await Promise.all(
     input.images.map(async (url) => processImage(await downloadImage(url), url)),
   );
+
+  const ownerId = serverEnv.publishUserId();
+  const photographer = input.photographerName || process.env.EXTERNAL_DEFAULT_PHOTOGRAPHER || DEFAULT_PHOTOGRAPHER;
+  const isWall = input.capturedAt != null && !input.capturedAt.endsWith("Z");
+  const taken = isWall
+    ? resolveTakenAt(input.capturedAt, null, input.lat, input.lng)
+    : { taken_at: input.capturedAt, taken_tz: timezoneAt(input.lat, input.lng) };
+
+  // --- Same AI pipeline as browser uploads (runs in parallel, never blocks the pin) ---
+  // Hashtags at the end of a social post become tags, not story text
+  const { text: storyText, hashtags } = splitStoryHashtags(input.story);
+  const thumbB64 = processed[0].thumb.toString("base64");
+  const [translation, tagged, generatedTitle] = await Promise.all([
+    aiTranslate([storyText ?? "", input.title ?? ""]),
+    aiTags(
+      {
+        imageB64: thumbB64,
+        takenAt: taken.taken_at,
+        lat: input.lat,
+        lng: input.lng,
+        locationName: input.locationName,
+        title: input.title,
+        story: storyText,
+      },
+      [...input.tags, ...hashtags],
+    ),
+    // A title the planner sent is translated, not replaced; otherwise generate 4-7 words
+    input.title ? Promise.resolve(null) : aiTitle({ story: storyText, imageB64: thumbB64, locationName: input.locationName }),
+  ]);
+  const story = translation.texts[0]?.trim() || null;
+  const title = input.title ? translation.texts[1]?.trim() || input.title : generatedTitle;
+  const tags = tagged.tags;
 
   const pinId = randomUUID();
   const prefix = `pins/${pinId}/`;
@@ -227,10 +285,12 @@ export async function createExternalPin(input: PublishInput): Promise<{ pinId: s
 
     const { error } = await db.from("photos").insert({
       id: pinId,
-      user_id: serverEnv.publishUserId(),
-      title: input.title,
+      user_id: ownerId,
+      photographer_name: photographer,
+      taken_tz: taken.taken_tz,
+      title,
       description: null,
-      story: input.story,
+      story,
       storage_provider: "r2",
       storage_path: `${prefix}0.jpg`,
       storage_keys: keys,
@@ -241,7 +301,7 @@ export async function createExternalPin(input: PublishInput): Promise<{ pinId: s
       longitude: input.lng,
       is_manual_location: false,
       location_name: input.locationName,
-      taken_at: input.capturedAt,
+      taken_at: taken.taken_at,
       camera_make: null,
       camera_model: input.exif.camera,
       lens: input.exif.lens,
@@ -251,14 +311,20 @@ export async function createExternalPin(input: PublishInput): Promise<{ pinId: s
       iso: input.exif.iso,
       width: processed[0].width,
       height: processed[0].height,
-      tags: input.tags,
+      tags,
       is_private: false,
       source: EXTERNAL_SOURCE,
       external_id: input.postId,
     });
     if (error) throw new HttpError(500, `Database insert failed: ${error.message}`);
 
-    return { pinId, existing: false };
+    return {
+      pinId,
+      existing: false,
+      title,
+      tags,
+      ai: { translated: translation.translated, titleGenerated: generatedTitle != null, tagged: tagged.ai },
+    };
   } catch (err) {
     // לא להשאיר קבצים יתומים ב-R2
     await r2DeleteAll(keys, prefix).catch(() => {});

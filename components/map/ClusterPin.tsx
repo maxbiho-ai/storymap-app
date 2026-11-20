@@ -29,7 +29,7 @@ function ClusterPin({ longitude, latitude, count, preview, onClick }: Props) {
     >
       <button
         type="button"
-        aria-label={`${count} תמונות — לחץ להתקרבות`}
+        aria-label={`${count} photos, click to zoom in`}
         className="relative cursor-pointer transition-transform hover:scale-110"
         style={{ width: size, height: size }}
       >
