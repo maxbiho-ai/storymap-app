@@ -5,7 +5,8 @@ import { getSupabaseAdmin } from "./supabaseAdmin";
 import { r2Put, r2PublicUrl, r2DeleteAll } from "./r2";
 import { serverEnv } from "./env";
 import { resolveTakenAt, timezoneAt } from "@/lib/time";
-import { aiTags, aiTitle, aiTranslate, splitStoryHashtags, timeBasedTags } from "./ai";
+import { aiEnrich, splitStoryHashtags } from "./ai";
+import { GEMINI_MAX_TIMEOUT_MS } from "./gemini";
 
 /** Photographer for planner pins when the payload has none (override with EXTERNAL_DEFAULT_PHOTOGRAPHER) */
 const DEFAULT_PHOTOGRAPHER = "Max Bihovskiy";
@@ -14,6 +15,11 @@ export const EXTERNAL_SOURCE = "maxbi-planner";
 const MAX_IMAGES = 10;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 20_000;
+/** Total function budget (env FUNCTION_TIMEOUT_MS, default Netlify's 26s sync limit) */
+const FUNCTION_TIMEOUT_MS = Number(process.env.FUNCTION_TIMEOUT_MS) || 26_000;
+/** Time kept free for the R2 upload + Supabase insert after the AI step */
+const RESERVE_MS = 6_000;
+const MIN_AI_BUDGET_MS = 1_500;
 
 /** שגיאה עם קוד HTTP, נזרקת מהלוגיקה ומתורגמת לתשובה ב-route */
 export class HttpError extends Error {
@@ -209,6 +215,7 @@ export interface CreatedPin {
 }
 
 export async function createExternalPin(input: PublishInput): Promise<CreatedPin> {
+  const startedAt = Date.now();
   const db = getSupabaseAdmin();
 
   // ניסיון חוזר עם אותו postId: מחזירים את הסיכה הקיימת במקום ליצור כפילות
@@ -254,38 +261,30 @@ export async function createExternalPin(input: PublishInput): Promise<CreatedPin
     console.error("[external-publish] hashtag split failed, keeping story as is:", err);
   }
   const thumbB64 = processed[0].thumb.toString("base64");
-  const [translationR, taggedR, titleR] = await Promise.allSettled([
-    aiTranslate([storyText ?? "", input.title ?? ""]),
-    aiTags(
-      {
-        imageB64: thumbB64,
-        takenAt: taken.taken_at,
-        lat: input.lat,
-        lng: input.lng,
-        locationName: input.locationName,
-        title: input.title,
-        story: storyText,
-      },
-      [...input.tags, ...hashtags],
-    ),
-    // A title the planner sent is translated, not replaced; otherwise generate 4-7 words
-    input.title ? Promise.resolve(null) : aiTitle({ story: storyText, imageB64: thumbB64, locationName: input.locationName }),
-  ]);
-  const settled = { translation: translationR, tags: taggedR, title: titleR };
-  for (const [step, r] of Object.entries(settled)) {
-    if (r.status === "rejected") console.error(`[external-publish] AI ${step} failed, using fallback:`, r.reason);
-  }
-  const translation =
-    translationR.status === "fulfilled" ? translationR.value : { texts: [storyText ?? "", input.title ?? ""], translated: false };
-  const tagged =
-    taggedR.status === "fulfilled"
-      ? taggedR.value
-      : timeBasedTags({ takenAt: taken.taken_at, lat: input.lat, lng: input.lng }, [...input.tags, ...hashtags]);
-  const generatedTitle = titleR.status === "fulfilled" ? titleR.value : null;
+  // ONE combined Gemini call (tags + title + translation) on the 480px thumbnail only.
+  // Budget: never let a slow call eat the time needed for the R2 upload + Supabase insert.
+  const remaining = FUNCTION_TIMEOUT_MS - (Date.now() - startedAt) - RESERVE_MS;
+  const aiBudget = Math.min(GEMINI_MAX_TIMEOUT_MS, remaining);
+  const enriched = await aiEnrich(
+    {
+      imageB64: aiBudget >= MIN_AI_BUDGET_MS ? thumbB64 : null, // null image => Gemini skipped, fallback used
+      takenAt: taken.taken_at,
+      lat: input.lat,
+      lng: input.lng,
+      locationName: input.locationName,
+      title: input.title,
+      story: storyText,
+    },
+    [...input.tags, ...hashtags],
+    Math.max(aiBudget, MIN_AI_BUDGET_MS),
+  );
 
-  const story = translation.texts[0]?.trim() || storyText || null;
-  const title = input.title ? translation.texts[1]?.trim() || input.title : generatedTitle;
-  const tags = tagged.tags;
+  const story = enriched.story?.trim() || storyText || null;
+  const title = enriched.title;
+  const tags = enriched.tags;
+  const translation = { translated: enriched.translated };
+  const generatedTitle = enriched.titleGenerated ? title : null;
+  const tagged = { ai: enriched.tagged };
 
   const pinId = randomUUID();
   const prefix = `pins/${pinId}/`;

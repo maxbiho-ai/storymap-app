@@ -192,6 +192,103 @@ async function aiTranslateInner(texts: string[]): Promise<{ texts: string[]; tra
 }
 
 // ---------------------------------------------------------------------------
+// Combined: translation + title + tags in ONE Gemini call (480px thumbnail only)
+// ---------------------------------------------------------------------------
+
+export interface EnrichInput extends AiTagsInput {
+  /** Title sent by the caller (translated, never replaced). null = generate one */
+  title: string | null;
+}
+
+export interface EnrichResult {
+  story: string | null;
+  title: string | null;
+  tags: string[];
+  phase: TimeOfDay | null;
+  translated: boolean;
+  titleGenerated: boolean;
+  tagged: boolean;
+}
+
+/**
+ * One structured-JSON call instead of three parallel ones. Never throws: on a missing key,
+ * timeout, bad JSON or any model error it returns the originals + time-based tags.
+ */
+export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutMs?: number): Promise<EnrichResult> {
+  const { lat, lng, takenAt } = input;
+  const located = lat != null && lng != null;
+  const fallback = (): EnrichResult => {
+    const t = timeBasedTags({ takenAt, lat, lng }, extraTags);
+    return { story: input.story ?? null, title: input.title ?? null, tags: t.tags, phase: t.phase, translated: false, titleGenerated: false, tagged: false };
+  };
+  if (!geminiConfigured() || !input.imageB64) return fallback();
+
+  try {
+    const phase = located ? getTimeOfDay(takenAt, lat, lng) : null;
+    const timeContext =
+      phase && takenAt && located
+        ? `Capture time (local): ${formatTakenAt(takenAt, timezoneAt(lat, lng))}. Solar phase: ${TIME_OF_DAY_LABEL[phase]} ` +
+          `(${isMorning(new Date(takenAt), lat, lng) ? "MORNING" : "EVENING"}). Golden sky in the MORNING is a sunrise, in the EVENING a sunset. Never contradict the solar phase.`
+        : "Capture time unknown: no sunrise or sunset tags unless the sun is clearly on the horizon.";
+
+    const story = input.story?.trim() || null;
+    const needTranslate = Boolean(story && !looksEnglish(story)) || Boolean(input.title && !looksEnglish(input.title));
+    const prompt = [
+      "You process one photo for a photography map. Return JSON with: tags, title, story, titleTranslated.",
+      "tags: 4 to 10 short English tags, lowercase, no spaces (milkyway, goldenhour), no '#'. Cover subject, scene, light/sky, weather, season, a landmark only if sure. No generic tags (photography, travel, nature, beautiful), camera brands or names of people.",
+      input.title
+        ? "title: return an empty string. titleTranslated: the given title translated to natural English (unchanged if already English)."
+        : "title: 4 to 7 words, English, Title Case, specific, no quotes/emojis/hashtags/trailing period/long dashes. titleTranslated: empty string.",
+      needTranslate
+        ? "story: the post translated to natural, fluent English; keep tone, line breaks, emojis, common English place names; use plain hyphens, never long dashes."
+        : "story: return the post unchanged.",
+      timeContext,
+      input.locationName ? `Location: ${input.locationName}.` : "",
+      input.title ? `Given title (any language): ${input.title}` : "",
+      story ? `Post (any language): ${story.slice(0, 4000)}` : "Post: (none)",
+    ].filter(Boolean).join("\n");
+
+    const out = await geminiJson<{ tags?: string[]; title?: string; story?: string; titleTranslated?: string }>(
+      [{ inline_data: { mime_type: "image/jpeg", data: input.imageB64 } }, { text: prompt }],
+      {
+        type: "OBJECT",
+        properties: {
+          tags: { type: "ARRAY", items: { type: "STRING" } },
+          title: { type: "STRING" },
+          story: { type: "STRING" },
+          titleTranslated: { type: "STRING" },
+        },
+        required: ["tags", "title", "story", "titleTranslated"],
+      },
+      timeoutMs,
+    );
+
+    const suggested = Array.isArray(out.tags) ? out.tags.filter((t): t is string => typeof t === "string") : [];
+    const merged = sanitizeTags([...extraTags, ...suggested], 30);
+    const reconciled = located ? reconcileTimeTags(merged, takenAt, lat, lng) : reconcileTimeTags(merged, null, 0, 0);
+
+    const translatedStory =
+      needTranslate && story && typeof out.story === "string" && out.story.trim() ? noLongDashes(out.story.trim()) : null;
+    const translatedTitle =
+      input.title && typeof out.titleTranslated === "string" && out.titleTranslated.trim() ? noLongDashes(out.titleTranslated.trim()) : null;
+    const generated = input.title ? null : cleanTitle(out.title);
+
+    return {
+      story: translatedStory ?? story,
+      title: input.title ? translatedTitle ?? input.title : generated,
+      tags: sanitizeTags(reconciled, 15),
+      phase,
+      translated: Boolean(translatedStory || translatedTitle),
+      titleGenerated: generated != null,
+      tagged: suggested.length > 0,
+    };
+  } catch (err) {
+    console.error("[ai/enrich] fallback to originals + time-based tags:", err);
+    return fallback();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Title
 // ---------------------------------------------------------------------------
 

@@ -2,7 +2,7 @@ import "server-only";
 
 /**
  * Minimal Gemini client (REST, structured JSON output).
- * Env: GEMINI_API_KEY (required), GEMINI_MODEL (default gemini-3.8-flash),
+ * Env: GEMINI_API_KEY (required), GEMINI_MODEL (default gemini-3.5-flash),
  * GEMINI_API_BASE (optional: a proxy / gateway in front of the Gemini API).
  */
 export function geminiConfigured(): boolean {
@@ -11,21 +11,32 @@ export function geminiConfigured(): boolean {
 
 type Part = { text: string } | { inline_data: { mime_type: string; data: string } };
 
-export async function geminiJson<T>(parts: Part[], schema: object, timeoutMs = 25_000): Promise<T> {
+/** Hard cap for any single Gemini call: a hanging model must never block the pin insert */
+export const GEMINI_MAX_TIMEOUT_MS = 8_000;
+
+/** gemini-3.8-flash → LOW; gemini-3.5-flash / -lite → MINIMAL (override: GEMINI_THINKING_LEVEL) */
+function thinkingLevelFor(model: string): string {
+  const o = process.env.GEMINI_THINKING_LEVEL?.trim().toUpperCase();
+  if (o) return o;
+  return /3\.5/.test(model) ? "MINIMAL" : "LOW";
+}
+
+export async function geminiJson<T>(parts: Part[], schema: object, timeoutMs = GEMINI_MAX_TIMEOUT_MS): Promise<T> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set");
-  const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+  const model = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 
   const res = await fetch(
     `${(process.env.GEMINI_API_BASE || "https://generativelanguage.googleapis.com").replace(/\/+$/, "")}/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(Math.min(timeoutMs, GEMINI_MAX_TIMEOUT_MS)),
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
         generationConfig: {
           temperature: 0.2,
+          thinkingConfig: { thinkingLevel: thinkingLevelFor(model) },
           responseMimeType: "application/json",
           responseSchema: schema,
         },
