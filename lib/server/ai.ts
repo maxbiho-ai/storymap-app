@@ -1,6 +1,6 @@
 import "server-only";
 import { geminiConfigured, geminiJson } from "./gemini";
-import { getTimeOfDay, isMorning, reconcileTimeTags, TIME_OF_DAY_LABEL, type TimeOfDay } from "@/lib/timeOfDay";
+import { getSolarPhase, getTimeOfDay, isMorning, reconcileTimeTags, solarPhaseLabel, type TimeOfDay } from "@/lib/timeOfDay";
 import { formatTakenAt, timezoneAt } from "@/lib/time";
 
 /**
@@ -101,7 +101,7 @@ async function aiTagsInner(input: AiTagsInput, extraTags: string[]): Promise<{ t
     const timeContext =
       phase && takenAt && located
         ? `Capture time (local at the location): ${formatTakenAt(takenAt, timezoneAt(lat, lng))}. ` +
-          `Solar phase computed from the timestamp and GPS: ${TIME_OF_DAY_LABEL[phase]} ` +
+          `Solar phase computed from the timestamp and GPS: ${solarPhaseLabel(getSolarPhase(takenAt, lat, lng)!)} ` +
           `(${isMorning(new Date(takenAt), lat, lng) ? "MORNING, before solar noon" : "EVENING, after solar noon"}). ` +
           `Golden or orange sky in the MORNING is a sunrise, in the EVENING it is a sunset. Never contradict the solar phase.`
         : "Capture time unknown: do not use sunrise or sunset tags unless the sun is clearly on the horizon.";
@@ -227,7 +227,7 @@ export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutM
     const phase = located ? getTimeOfDay(takenAt, lat, lng) : null;
     const timeContext =
       phase && takenAt && located
-        ? `Capture time (local): ${formatTakenAt(takenAt, timezoneAt(lat, lng))}. Solar phase: ${TIME_OF_DAY_LABEL[phase]} ` +
+        ? `Capture time (local): ${formatTakenAt(takenAt, timezoneAt(lat, lng))}. Solar phase: ${solarPhaseLabel(getSolarPhase(takenAt, lat, lng)!)} ` +
           `(${isMorning(new Date(takenAt), lat, lng) ? "MORNING" : "EVENING"}). Golden sky in the MORNING is a sunrise, in the EVENING a sunset. Never contradict the solar phase.`
         : "Capture time unknown: no sunrise or sunset tags unless the sun is clearly on the horizon.";
 

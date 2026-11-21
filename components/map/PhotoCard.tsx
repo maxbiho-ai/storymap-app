@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Photo } from "@/types/photo";
-import { getTimeOfDay, TIME_OF_DAY_LABEL } from "@/lib/timeOfDay";
+import { getSolarPhase, solarPhaseLabel } from "@/lib/timeOfDay";
 import { formatTakenAt } from "@/lib/time";
 import { formatLatLng, reverseGeocode, type PlaceSuggestion } from "@/lib/geocode";
 import { copyText, updateOwnPhoto } from "@/lib/photoEdits";
@@ -92,7 +92,8 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   const isOwner = Boolean(currentUserId && currentUserId === photo.user_id);
 
   const stack = stackProp?.length ? stackProp : [photo];
-  const tod = getTimeOfDay(photo.taken_at, photo.latitude, photo.longitude);
+  const solar = getSolarPhase(photo.taken_at, photo.latitude, photo.longitude);
+  const tod = solar?.phase ?? null;
   const camera = cameraLine(photo);
   const exposure = exposureLine(photo);
   const ratio = photo.width && photo.height ? photo.width / photo.height : 3 / 2;
@@ -106,7 +107,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
 
   // Every image of every photo on this pin, as one sequence
   const slides = useMemo(
-    () => stack.flatMap((p) => imagesOf(p).map((src, i) => ({ photoId: p.id, i, src, alt: p.title ?? p.location_name ?? "", caption: p.title }))),
+    () => stack.flatMap((p) => imagesOf(p).map((src, i) => ({ photoId: p.id, i, src, alt: p.title ?? p.location_name ?? "", caption: p.title, location: p.location_name }))),
     [stack],
   );
   const offset = slides.findIndex((s) => s.photoId === photo.id);
@@ -149,7 +150,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
     setPhotographer(activePhotographer === photo.photographer_name ? null : photo.photographer_name);
   };
 
-  const lightboxSlides: Slide[] = slides.map((s) => ({ src: s.src, alt: s.alt, caption: s.caption }));
+  const lightboxSlides: Slide[] = slides.map((s) => ({ src: s.src, alt: s.alt, caption: s.caption, location: s.location }));
   const stackPos = stack.length > 1 ? stack.findIndex((p) => p.id === photo.id) + 1 : 0;
 
   return (
@@ -238,6 +239,12 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
                   role="tooltip"
                   className={`pointer-events-none invisible absolute left-0 z-30 ${tipBelow ? "top-full mt-2" : "bottom-full mb-2"} w-[300px] max-w-[calc(100vw-3rem)] rounded-xl bg-white px-3 py-2 text-xs leading-relaxed text-neutral-800 opacity-0 shadow-2xl transition-opacity duration-150 group-hover/loc:visible group-hover/loc:opacity-100 group-focus-within/loc:visible group-focus-within/loc:opacity-100`}
                 >
+                  {photo.location_name && (
+                    <p className="mb-0.5 flex items-start gap-1 text-[11px] font-medium text-neutral-500">
+                      <span aria-hidden>📍</span>
+                      <span className="break-words">{photo.location_name}</span>
+                    </p>
+                  )}
                   {tipTitle && <p className="mb-1 font-semibold text-neutral-900">{tipTitle}</p>}
                   {body && <p className="line-clamp-[12] whitespace-pre-line">{body}</p>}
                   {body && body.length > 600 && <p className="mt-1 text-[10px] text-neutral-500">Click the name to read all</p>}
@@ -264,6 +271,12 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
         {/* Tap / click version of the story: in-flow, scrollable */}
         {infoOpen && hasTip && !editLoc && (
           <div className="max-h-56 overflow-y-auto rounded-xl bg-white/5 px-3 py-2 text-sm leading-relaxed text-neutral-200">
+            {photo.location_name && (
+              <p className="mb-0.5 flex items-start gap-1 text-xs font-medium text-neutral-400">
+                <span aria-hidden>📍</span>
+                <span className="break-words">{photo.location_name}</span>
+              </p>
+            )}
             {tipTitle && <p className="mb-1 font-semibold text-white">{tipTitle}</p>}
             {body && <p className="whitespace-pre-line">{body}</p>}
           </div>
@@ -294,7 +307,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
           <p className="flex items-center gap-1.5 text-xs text-neutral-400">
             {tod && <TimeIcon t={tod} size={16} />}
             {when}
-            {tod && <span className="text-neutral-500">· {TIME_OF_DAY_LABEL[tod]}</span>}
+            {solar && <span className="text-neutral-500">· {solarPhaseLabel(solar)}</span>}
           </p>
         )}
 

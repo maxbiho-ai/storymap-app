@@ -7,6 +7,8 @@ export interface Slide {
   src: string;
   alt?: string;
   caption?: string | null;
+  /** Full place name, shown untruncated above the caption */
+  location?: string | null;
 }
 
 interface Props {
@@ -104,10 +106,11 @@ export default function Lightbox({ slides, startIndex, onClose }: Props) {
         </>
       )}
 
-      {slide.caption && (
-        <p className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-6 pb-5 pt-10 text-center text-sm text-white/90">
-          {slide.caption}
-        </p>
+      {(slide.caption || slide.location) && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-6 pb-5 pt-10 text-center">
+          {slide.location && <p className="break-words text-xs font-medium text-white/65">📍 {slide.location}</p>}
+          {slide.caption && <p className="mt-0.5 text-sm text-white/90">{slide.caption}</p>}
+        </div>
       )}
     </div>,
     document.body,
