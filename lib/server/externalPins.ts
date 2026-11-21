@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
+import exifr from "exifr";
 import { getSupabaseAdmin } from "./supabaseAdmin";
 import { r2Put, r2PublicUrl, r2DeleteAll } from "./r2";
 import { serverEnv } from "./env";
@@ -172,26 +173,62 @@ interface Processed {
   height: number;
 }
 
+/** Long edge of the stored main image (4K); smaller images are never upscaled */
+export const MAIN_MAX_EDGE = 3840;
+/** Originals up to this size can be stored byte-for-byte */
+const PASSTHROUGH_MAX_BYTES = 20 * 1024 * 1024;
+
+/** Main image: photographic quality. Full chroma (4:4:4), sRGB profile embedded, no other metadata (no GPS). */
+const MAIN_JPEG = { quality: 92, mozjpeg: true, chromaSubsampling: "4:4:4", progressive: true } as const;
+
 /**
- * אותו פורמט כמו העלאה מהאפליקציה: 2048px באיכות 82%, thumbnail של 480px.
- * הקידוד מחדש מוחק את ה-EXIF מהקובץ הציבורי (כולל GPS); הנתונים נשמרים ב-DB.
+ * Main image up to 3840px at JPEG q92 4:4:4 + a 480px thumbnail (map pins and the Gemini call only).
+ * A JPEG that is already web-ready (≤3840px, upright, no GPS in its EXIF, ≤20MB) is stored as is:
+ * re-encoding can only lose detail. Otherwise it is re-encoded, which drops EXIF (incl. GPS) from
+ * the public file; the EXIF values that matter are kept in the DB.
  */
 export async function processImage(input: Buffer, url: string): Promise<Processed> {
   try {
-    const base = sharp(input, { failOn: "error" }).rotate(); // לפי Orientation ואז מחיקת metadata
-    const { data: main, info } = await base
-      .clone()
-      .resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 82, mozjpeg: true })
-      .toBuffer({ resolveWithObject: true });
+    const meta = await sharp(input, { failOn: "error" }).metadata();
+    const w = meta.autoOrient?.width ?? meta.width ?? 0;
+    const h = meta.autoOrient?.height ?? meta.height ?? 0;
+    const base = sharp(input, { failOn: "error" }).rotate(); // apply EXIF Orientation
+
     const thumb = await base
       .clone()
       .resize({ width: 480, height: 480, fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 75, mozjpeg: true })
+      .withIccProfile("srgb")
+      .jpeg({ quality: 80, mozjpeg: true })
       .toBuffer();
+
+    if (await canStoreOriginal(input, meta, w, h)) {
+      return { main: input, thumb, width: w, height: h };
+    }
+
+    const { data: main, info } = await base
+      .clone()
+      .resize({ width: MAIN_MAX_EDGE, height: MAIN_MAX_EDGE, fit: "inside", withoutEnlargement: true, kernel: "lanczos3" })
+      .withIccProfile("srgb") // convert to sRGB and embed the profile: colors match on every screen
+      .jpeg(MAIN_JPEG)
+      .toBuffer({ resolveWithObject: true });
     return { main, thumb, width: info.width, height: info.height };
   } catch {
     throw new HttpError(422, `File is not a supported image: ${url}`);
+  }
+}
+
+async function canStoreOriginal(input: Buffer, meta: sharp.Metadata, w: number, h: number): Promise<boolean> {
+  if (meta.format !== "jpeg" || input.byteLength > PASSTHROUGH_MAX_BYTES) return false;
+  if (Math.max(w, h) > MAIN_MAX_EDGE) return false;
+  if (meta.orientation && meta.orientation !== 1) return false; // browsers would show it rotated
+  if (meta.space && meta.space !== "srgb") return false; // CMYK etc.
+  if (!meta.exif) return true;
+  try {
+    // Never publish a file that still carries GPS
+    const gps = await exifr.gps(input);
+    return !(gps && Number.isFinite(gps.latitude) && Number.isFinite(gps.longitude));
+  } catch {
+    return false;
   }
 }
 

@@ -1,6 +1,10 @@
 import { getSupabase, PHOTOS_BUCKET } from "@/lib/supabase/client";
 import type { ExtractedExif, Photo, PhotoInsert } from "@/types/photo";
-import type { CompressedImage } from "@/lib/compress";
+import { fitLegacyLimit, LEGACY_BUCKET_LIMIT_MB, type CompressedImage } from "@/lib/compress";
+
+function isSizeError(err: { message: string; statusCode?: string | number }): boolean {
+  return String(err.statusCode ?? "") === "413" || /maximum allowed size|too large|payload/i.test(err.message);
+}
 
 /** Final, resolved values for one photo (location, time, translated text...) */
 export interface UploadFields {
@@ -36,10 +40,16 @@ export async function uploadPhoto(
   const thumbPath = `${userId}/${id}_thumb.jpg`;
   const opts = { contentType: "image/jpeg", cacheControl: "31536000", upsert: false };
 
-  const [main, thumb] = await Promise.all([
+  const [mainFirst, thumb] = await Promise.all([
     bucket.upload(storagePath, compressed.file, opts),
     bucket.upload(thumbPath, compressed.thumb, opts),
   ]);
+  let main = mainFirst;
+  // Bucket still on the old 5MB limit (migration 005 not applied): same resolution, fitted to 5MB
+  if (main.error && isSizeError(main.error) && compressed.file.size > LEGACY_BUCKET_LIMIT_MB * 1024 * 1024) {
+    console.warn("Storage rejected the full-quality file; apply supabase/migrations/005_photo_quality.sql to lift the 5MB limit");
+    main = await bucket.upload(storagePath, await fitLegacyLimit(compressed.file), opts);
+  }
   if (main.error || thumb.error) {
     await bucket.remove([storagePath, thumbPath]);
     throw new Error(`Storage upload failed: ${(main.error ?? thumb.error)!.message}`);

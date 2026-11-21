@@ -185,7 +185,8 @@ export function useUploadBatch(opts: {
           patch(item.id, { status: "processing" });
           try {
             const exif = await extractExif(item.file);
-            const compressed = await compressImage(item.file);
+            // Keep a web-ready original byte-for-byte only when it carries no GPS (the file is public)
+            const compressed = await compressImage(item.file, { keepOriginal: exif.latitude == null && exif.longitude == null });
             patch(item.id, {
               exif,
               compressed,
