@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { Photo } from "@/types/photo";
+import { useMapStore } from "@/store/mapStore";
+import SocialActions from "@/components/social/SocialActions";
+import CommentsSection from "@/components/social/CommentsSection";
+import DeleteDialog from "@/components/social/DeleteDialog";
 
 export interface Slide {
   src: string;
@@ -9,6 +14,17 @@ export interface Slide {
   caption?: string | null;
   /** Full place name, shown untruncated above the caption */
   location?: string | null;
+  /** The photo this image belongs to: enables like / save / comments / owner delete */
+  photo?: Photo;
+  /** Index of this image inside photo.image_urls */
+  imageIndex?: number;
+}
+
+/** Typing in a field, or a confirm dialog on top: the viewer leaves the keys alone */
+function keysBelongElsewhere(e: KeyboardEvent): boolean {
+  const t = e.target as HTMLElement | null;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return true;
+  return Boolean(document.querySelector("[role=alertdialog]"));
 }
 
 interface Props {
@@ -29,11 +45,17 @@ export default function Lightbox({ slides, startIndex, onClose }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const many = slides.length > 1;
   const go = useCallback((d: number) => setIdx((i) => (i + d + slides.length) % slides.length), [slides.length]);
-  const slide = slides[idx];
+  const slide = slides[Math.min(idx, slides.length - 1)];
+  const me = useMapStore((s) => s.currentUserId);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const photo = slide?.photo;
+  const isOwner = Boolean(photo && me && me === photo.user_id);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!["Escape", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+      if (keysBelongElsewhere(e)) return;
       e.stopImmediatePropagation(); // capture phase: the map's Esc handler never sees it
       e.preventDefault();
       if (e.key === "Escape") onClose();
@@ -104,6 +126,40 @@ export default function Lightbox({ slides, startIndex, onClose }: Props) {
           <button type="button" onClick={() => go(-1)} aria-label="Previous photo" className={`${arrow} left-3`}>‹</button>
           <button type="button" onClick={() => go(1)} aria-label="Next photo" className={`${arrow} right-3`}>›</button>
         </>
+      )}
+
+      {photo && (
+        <div className="absolute left-3 top-14 z-20 w-[min(22rem,calc(100vw-1.5rem))]">
+          <SocialActions
+            photoId={photo.id}
+            tone="overlay"
+            commentsOpen={commentsOpen}
+            onToggleComments={() => setCommentsOpen((o) => !o)}
+            onDelete={isOwner ? () => setDeleting(true) : undefined}
+          />
+        </div>
+      )}
+
+      {photo && commentsOpen && (
+        <aside onTouchStart={(e) => e.stopPropagation()} onTouchEnd={(e) => e.stopPropagation()} className="absolute inset-x-0 bottom-0 z-20 max-h-[70vh] overflow-y-auto rounded-t-2xl bg-neutral-950/95 p-4 text-neutral-100 shadow-2xl backdrop-blur sm:inset-x-auto sm:bottom-0 sm:right-0 sm:top-16 sm:max-h-none sm:w-96 sm:rounded-none sm:rounded-tl-2xl">
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Comments &amp; questions</p>
+            <button type="button" onClick={() => setCommentsOpen(false)} aria-label="Close comments" className="text-xl leading-none text-neutral-400 hover:text-white">×</button>
+          </div>
+          <CommentsSection photoId={photo.id} ownerId={photo.user_id} tall />
+        </aside>
+      )}
+
+      {photo && deleting && (
+        <DeleteDialog
+          photo={photo}
+          imageIndex={Math.min(slide.imageIndex ?? 0, Math.max(0, (photo.image_urls?.length ?? 1) - 1))}
+          onClose={() => setDeleting(false)}
+          onDeleted={() => {
+            setDeleting(false);
+            onClose();
+          }}
+        />
       )}
 
       {(slide.caption || slide.location) && (

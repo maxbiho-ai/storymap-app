@@ -45,3 +45,28 @@ export async function copyText(text: string): Promise<boolean> {
     }
   }
 }
+
+/**
+ * Owner delete through /api/photos/delete (the server also removes the files from Supabase Storage / R2).
+ * imageIndex on a multi-image post removes only that image. The map updates at once.
+ */
+export async function deleteOwnPhoto(id: string, imageIndex?: number): Promise<"photo" | "image"> {
+  const { data } = await getSupabase().auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Please log in again");
+  const res = await fetch("/api/photos/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ photoId: id, imageIndex }),
+  });
+  const json = (await res.json().catch(() => null)) as { ok?: boolean; error?: string; deleted?: "photo" | "image"; photo?: Photo } | null;
+  if (!res.ok || !json?.ok || !json.deleted) throw new Error(json?.error ?? `Delete failed (${res.status})`);
+
+  const store = useMapStore.getState();
+  if (json.deleted === "photo") store.markDeleted(id);
+  else if (json.photo) {
+    const p = json.photo;
+    store.applyEdit(id, { image_urls: p.image_urls, photo_url: p.photo_url, thumb_url: p.thumb_url, storage_path: p.storage_path, width: p.width, height: p.height });
+  }
+  return json.deleted;
+}

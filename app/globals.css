@@ -21,3 +21,10 @@
     bottom: calc(4.5rem + env(safe-area-inset-bottom));
   }
 }
+
+/* Like button: a small pop when the heart fills */
+@keyframes pop {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}

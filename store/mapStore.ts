@@ -50,6 +50,22 @@ interface MapState {
   /** Saved owner edits, merged over the loaded photos until the next query returns them */
   edits: Record<string, Partial<Photo>>;
   applyEdit: (id: string, patch: Partial<Photo>) => void;
+
+  /** Photos the owner deleted: hidden at once, before the next query */
+  deleted: Record<string, true>;
+  markDeleted: (id: string) => void;
+
+  /** Signed-in user's saved list shown on the map as a trip route (null = normal map) */
+  activeCollection: { id: string; name: string } | null;
+  setActiveCollection: (c: { id: string; name: string } | null) => void;
+
+  /** Open the comments thread of this photo (notification click) */
+  commentsFor: string | null;
+  openComments: (photoId: string | null) => void;
+
+  /** A guest tried a signed-in action (like, save, comment): page opens the login modal */
+  loginRequest: number;
+  requestLogin: () => void;
 }
 
 export const useMapStore = create<MapState>((set) => ({
@@ -83,6 +99,19 @@ export const useMapStore = create<MapState>((set) => ({
 
   edits: {},
   applyEdit: (id, patch) => set((s) => ({ edits: { ...s.edits, [id]: { ...s.edits[id], ...patch } } })),
+
+  deleted: {},
+  markDeleted: (id) =>
+    set((s) => ({ deleted: { ...s.deleted, [id]: true }, selectedId: s.selectedId === id ? null : s.selectedId, hoveredId: s.hoveredId === id ? null : s.hoveredId })),
+
+  activeCollection: null,
+  setActiveCollection: (activeCollection) => set({ activeCollection }),
+
+  commentsFor: null,
+  openComments: (commentsFor) => set({ commentsFor }),
+
+  loginRequest: 0,
+  requestLogin: () => set((s) => ({ loginRequest: s.loginRequest + 1 })),
 }));
 
 /** Is a point inside bounds (handles maps crossing the date line) */

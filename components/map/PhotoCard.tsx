@@ -10,6 +10,9 @@ import { useMapStore } from "@/store/mapStore";
 import LocationAutocomplete, { PlaceChips } from "@/components/LocationAutocomplete";
 import TimeIcon from "./TimeIcon";
 import Lightbox, { type Slide } from "./Lightbox";
+import SocialActions from "@/components/social/SocialActions";
+import CommentsSection from "@/components/social/CommentsSection";
+import DeleteDialog from "@/components/social/DeleteDialog";
 
 function exposureLine(p: Photo): string {
   return [
@@ -89,6 +92,8 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   const select = useMapStore((s) => s.select);
   const currentUserId = useMapStore((s) => s.currentUserId);
   const startGpsEdit = useMapStore((s) => s.startGpsEdit);
+  const commentsFor = useMapStore((s) => s.commentsFor);
+  const openComments = useMapStore((s) => s.openComments);
   const isOwner = Boolean(currentUserId && currentUserId === photo.user_id);
 
   const stack = stackProp?.length ? stackProp : [photo];
@@ -107,7 +112,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
 
   // Every image of every photo on this pin, as one sequence
   const slides = useMemo(
-    () => stack.flatMap((p) => imagesOf(p).map((src, i) => ({ photoId: p.id, i, src, alt: p.title ?? p.location_name ?? "", caption: p.title, location: p.location_name }))),
+    () => stack.flatMap((p) => imagesOf(p).map((src, i) => ({ photoId: p.id, photo: p, i, src, alt: p.title ?? p.location_name ?? "", caption: p.title, location: p.location_name }))),
     [stack],
   );
   const offset = slides.findIndex((s) => s.photoId === photo.id);
@@ -119,12 +124,25 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   const [tipBelow, setTipBelow] = useState(false);
   const [copied, setCopied] = useState<"loc" | "gps" | null>(null);
   const [editLoc, setEditLoc] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  // Opened from a notification: show the thread with the composer focused
+  const fromNotification = commentsFor === photo.id;
+  useEffect(() => {
+    if (fromNotification) setCommentsOpen(true);
+  }, [fromNotification]);
+  // An image of the post was deleted: stay inside the remaining ones
+  useEffect(() => {
+    setIdx((i) => Math.min(i, images.length - 1));
+  }, [images.length]);
 
   useEffect(() => {
     setIdx(pendingIdx.current ?? 0);
     pendingIdx.current = null;
     setInfoOpen(false);
     setEditLoc(false);
+    setCommentsOpen(false);
+    setDeleting(false);
   }, [photo.id]);
 
   const global = Math.max(0, offset) + idx;
@@ -150,7 +168,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
     setPhotographer(activePhotographer === photo.photographer_name ? null : photo.photographer_name);
   };
 
-  const lightboxSlides: Slide[] = slides.map((s) => ({ src: s.src, alt: s.alt, caption: s.caption, location: s.location }));
+  const lightboxSlides: Slide[] = slides.map((s) => ({ src: s.src, alt: s.alt, caption: s.caption, location: s.location, photo: s.photo, imageIndex: s.i }));
   const stackPos = stack.length > 1 ? stack.findIndex((p) => p.id === photo.id) + 1 : 0;
 
   return (
@@ -216,6 +234,18 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
       </div>
 
       <div className="space-y-1.5 px-4 pb-4 pt-1">
+        <div className="-mx-2">
+          <SocialActions
+            photoId={photo.id}
+            commentsOpen={commentsOpen}
+            onToggleComments={() => {
+              setCommentsOpen((o) => !o);
+              if (fromNotification) openComments(null);
+            }}
+            onDelete={isOwner ? () => setDeleting(true) : undefined}
+          />
+        </div>
+
         {/* Location: hover (or ⓘ on touch) shows the description / story */}
         {editLoc ? (
           <LocationEditor photo={photo} onDone={() => setEditLoc(false)} />
@@ -327,6 +357,27 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
           </div>
         )}
       </div>
+
+      {commentsOpen && (
+        <div className="border-t border-white/10 px-4 pb-4 pt-3">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Comments &amp; questions</p>
+          <CommentsSection photoId={photo.id} ownerId={photo.user_id} autoFocus={fromNotification} />
+        </div>
+      )}
+
+      {deleting && (
+        <DeleteDialog
+          photo={photo}
+          imageIndex={Math.min(idx, images.length - 1)}
+          onClose={() => setDeleting(false)}
+          onDeleted={(what) => {
+            setDeleting(false);
+            setLightbox(false);
+            if (what === "photo") onClose();
+            else setIdx(0);
+          }}
+        />
+      )}
 
       {lightbox && <Lightbox slides={lightboxSlides} startIndex={global} onClose={() => setLightbox(false)} />}
     </div>

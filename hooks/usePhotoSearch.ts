@@ -21,7 +21,8 @@ function escapeForOr(s: string): string {
  * - query:        location name / title (partial, case-insensitive) or an exact tag
  * - tags:         contains → the photo must have *all* selected tags
  * - photographer: exact name, case-insensitive
- * - bounds:       the visible map area
+ * - area:         a geocoded place (country / region / city): pins inside its bbox
+ * - bounds:       the visible map area (ignored while an area is set)
  * 300ms debounce, and stale responses are dropped.
  */
 export function usePhotoSearch(filters: PhotoFilters) {
@@ -58,8 +59,12 @@ export function usePhotoSearch(filters: PhotoFilters) {
         );
       }
 
-      if (filters.bounds) {
-        const { north, south, east, west } = filters.bounds;
+      // A searched place (Germany, Frankfurt…) replaces the viewport: every pin inside its bbox
+      const box = filters.area
+        ? { west: filters.area.bbox[0], south: filters.area.bbox[1], east: filters.area.bbox[2], north: filters.area.bbox[3] }
+        : filters.bounds;
+      if (box) {
+        const { north, south, east, west } = box;
         q = q.gte("latitude", south).lte("latitude", north);
         // Map crossing the date line (west > east)
         q = west <= east

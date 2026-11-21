@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { normalizeTag } from "@/lib/tags";
+import { geocodeAreas, areaLabel, kindLabel } from "@/lib/geocode";
 import { usePopularPhotographers, usePopularTags } from "@/hooks/usePhotoSearch";
-import type { PhotoFilters } from "@/types/photo";
+import type { GeoArea, PhotoFilters } from "@/types/photo";
 
 type Filters = Omit<PhotoFilters, "bounds">;
 
@@ -13,6 +14,10 @@ interface Props {
   resultCount?: number;
   loading?: boolean;
 }
+
+type Suggestion =
+  | { kind: "tag" | "person"; value: string; count: number }
+  | { kind: "place"; value: string; area: GeoArea };
 
 /**
  * Splits what's typed into the three filter kinds:
@@ -31,19 +36,54 @@ export function parseSearch(draft: string): { text: string; tags: string[]; pers
   return { text, tags, person, partialTag: at < 0 && last.startsWith("#") ? normalizeTag(last) : null };
 }
 
-/** Search: plain text = location name, #tag, @photographer */
+/** Does the typed text name this place ("germany" → Germany, "frankf" → Frankfurt, Germany)? */
+function namesPlace(text: string, area: GeoArea): boolean {
+  const t = text.trim().toLowerCase();
+  const first = area.name.split(",")[0].trim().toLowerCase();
+  return t.length >= 3 && (first === t || first.startsWith(t));
+}
+
+/** Search: plain text = location name or a place (country / region / city), #tag, @photographer */
 export default function PhotoSearchBar({ value, onChange, resultCount, loading }: Props) {
   const popularTags = usePopularTags();
   const photographers = usePopularPhotographers();
   const [draft, setDraft] = useState(value.query);
   const [focused, setFocused] = useState(false);
   const [active, setActive] = useState(0);
+  const [navigated, setNavigated] = useState(false);
+  const [places, setPlaces] = useState<GeoArea[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const parsed = parseSearch(draft);
-  const mode: "person" | "tag" | "none" = parsed.person !== null ? "person" : parsed.partialTag !== null || !draft.trim() ? "tag" : "none";
+  // Keep the box in sync when the filters are reset from outside (notification click, Clear…)
+  const isEmpty = !value.query && !value.tags.length && !value.photographer && !value.area;
+  useEffect(() => {
+    if (isEmpty) setDraft("");
+  }, [isEmpty]);
 
-  const suggestions = useMemo(() => {
+  const parsed = parseSearch(draft);
+  const mode: "person" | "tag" | "place" =
+    parsed.person !== null ? "person" : parsed.partialTag !== null || !draft.trim() ? "tag" : "place";
+
+  // Places from Mapbox Geocoding for plain text (debounced, stale requests aborted)
+  const placeQuery = mode === "place" ? parsed.text : "";
+  useEffect(() => {
+    if (placeQuery.trim().length < 2) {
+      setPlaces([]);
+      return;
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => {
+      geocodeAreas(placeQuery, ctrl.signal)
+        .then(setPlaces)
+        .catch(() => {});
+    }, 250);
+    return () => {
+      clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [placeQuery]);
+
+  const suggestions = useMemo<Suggestion[]>(() => {
     if (mode === "person") {
       const needle = (parsed.person ?? "").toLowerCase();
       return photographers
@@ -60,37 +100,58 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading }
         .slice(0, 8)
         .map((t) => ({ kind: "tag" as const, value: t.tag, count: t.photo_count }));
     }
-    return [];
-  }, [mode, parsed.person, parsed.partialTag, photographers, popularTags, value.tags, value.photographer]);
+    return places.filter((a) => a.id !== value.area?.id).map((area) => ({ kind: "place" as const, value: area.id, area }));
+  }, [mode, parsed.person, parsed.partialTag, photographers, popularTags, places, value.tags, value.photographer, value.area?.id]);
 
-  /** Typing filters by location live; #tags / @person become chips on Enter */
+  /** Typing filters by location name live; #tags / @person become chips on Enter; places on pick */
   const updateDraft = (next: string) => {
     setDraft(next);
     setActive(0);
+    setNavigated(false);
     const { text } = parseSearch(next);
     if (text !== value.query) onChange({ ...value, query: text });
   };
 
-  const commit = (extra?: { kind: "tag" | "person"; value: string }) => {
+  const commit = (extra?: Suggestion) => {
     const p = parseSearch(draft);
+    if (extra?.kind === "place") {
+      // The place replaces the typed text: "Germany" is an area, not a location-name match
+      setDraft("");
+      setPlaces([]);
+      onChange({ ...value, query: "", tags: [...new Set([...value.tags, ...p.tags])], area: extra.area });
+      inputRef.current?.blur();
+      return;
+    }
     let tags = [...value.tags, ...p.tags];
     let photographer = p.person || value.photographer;
     if (extra?.kind === "tag") tags = [...tags.filter((t) => t !== p.partialTag), extra.value];
     if (extra?.kind === "person") photographer = extra.value;
     tags = [...new Set(tags)];
     setDraft(p.text);
-    onChange({ query: p.text, tags, photographer: photographer || null });
+    onChange({ ...value, query: p.text, tags, photographer: photographer || null });
     inputRef.current?.focus();
   };
 
   const removeTag = (t: string) => onChange({ ...value, tags: value.tags.filter((x) => x !== t) });
   const clearAll = () => {
     setDraft("");
-    onChange({ query: "", tags: [], photographer: null });
+    setPlaces([]);
+    onChange({ query: "", tags: [], photographer: null, area: null });
   };
 
-  const hasFilters = value.tags.length > 0 || value.query.trim() !== "" || Boolean(value.photographer);
+  const hasFilters = !isEmpty;
   const showSuggestions = focused && suggestions.length > 0;
+
+  const onEnter = () => {
+    if (mode === "place") {
+      // Arrowed onto a place → that place; otherwise text that names a place ("Germany") → the top match
+      const picked = showSuggestions && navigated ? suggestions[active] : undefined;
+      const named = suggestions.find((s) => s.kind === "place" && namesPlace(parsed.text, s.area));
+      return commit(picked ?? named);
+    }
+    const s = showSuggestions && (parsed.partialTag || parsed.person) ? suggestions[active] : undefined;
+    commit(s);
+  };
 
   return (
     <div className="relative w-full max-w-xl">
@@ -99,6 +160,12 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading }
           <path d="M8.5 3a5.5 5.5 0 014.38 8.83l3.65 3.64-1.06 1.06-3.64-3.65A5.5 5.5 0 118.5 3zm0 1.5a4 4 0 100 8 4 4 0 000-8z" />
         </svg>
 
+        {value.area && (
+          <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+            📍 {areaLabel(value.area)}
+            <button type="button" onClick={() => onChange({ ...value, area: null })} aria-label={`Remove place ${value.area.name}`} className="opacity-60 hover:opacity-100">×</button>
+          </span>
+        )}
         {value.photographer && (
           <span className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/60 dark:text-amber-100">
             @{value.photographer}
@@ -119,20 +186,20 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading }
           onFocus={() => setFocused(true)}
           onBlur={() => setTimeout(() => setFocused(false), 150)}
           onKeyDown={(e) => {
-            if (e.key === "ArrowDown" && showSuggestions) { e.preventDefault(); setActive((a) => (a + 1) % suggestions.length); }
-            if (e.key === "ArrowUp" && showSuggestions) { e.preventDefault(); setActive((a) => (a - 1 + suggestions.length) % suggestions.length); }
+            if (e.key === "ArrowDown" && showSuggestions) { e.preventDefault(); setNavigated(true); setActive((a) => (a + 1) % suggestions.length); }
+            if (e.key === "ArrowUp" && showSuggestions) { e.preventDefault(); setNavigated(true); setActive((a) => (a - 1 + suggestions.length) % suggestions.length); }
             if (e.key === "Enter") {
               e.preventDefault();
-              const s = showSuggestions && (parsed.partialTag || parsed.person) ? suggestions[active] : undefined;
-              commit(s ? { kind: s.kind, value: s.value } : undefined);
+              onEnter();
             }
             if (e.key === "Backspace" && !draft) {
               if (value.tags.length) removeTag(value.tags[value.tags.length - 1]);
               else if (value.photographer) onChange({ ...value, photographer: null });
+              else if (value.area) onChange({ ...value, area: null });
             }
             if (e.key === "Escape") inputRef.current?.blur();
           }}
-          placeholder={hasFilters ? "Add more…" : "Search a place, #tag or @photographer"}
+          placeholder={hasFilters ? "Add more…" : "Search a place, country, #tag or @photographer"}
           className="min-w-[8rem] flex-1 bg-transparent py-1 text-sm outline-none placeholder:text-neutral-400"
           aria-label="Search photos"
           aria-autocomplete="list"
@@ -150,7 +217,7 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading }
       {showSuggestions && (
         <ul role="listbox" className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-auto rounded-xl border border-neutral-200 bg-white py-1 text-sm shadow-lg dark:border-neutral-800 dark:bg-neutral-900">
           <li className="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
-            {mode === "person" ? "Photographers" : "Tags"}
+            {mode === "person" ? "Photographers" : mode === "tag" ? "Tags" : "Places · zoom there & show pins inside"}
           </li>
           {suggestions.map((s, i) => (
             <li key={`${s.kind}-${s.value}`} role="option" aria-selected={i === active}>
@@ -158,11 +225,20 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading }
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => setActive(i)}
-                onClick={() => commit({ kind: s.kind, value: s.value })}
-                className={`flex w-full justify-between px-3 py-1.5 text-left ${i === active ? "bg-neutral-100 dark:bg-neutral-800" : ""}`}
+                onClick={() => commit(s)}
+                className={`flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left ${i === active ? "bg-neutral-100 dark:bg-neutral-800" : ""}`}
               >
-                <span>{s.kind === "person" ? `@${s.value}` : `#${s.value}`}</span>
-                <span className="text-xs text-neutral-400">{s.count}</span>
+                {s.kind === "place" ? (
+                  <>
+                    <span className="truncate">📍 {areaLabel(s.area)}</span>
+                    <span className="shrink-0 text-xs text-neutral-400">{kindLabel(s.area.kind)}</span>
+                  </>
+                ) : (
+                  <>
+                    <span>{s.kind === "person" ? `@${s.value}` : `#${s.value}`}</span>
+                    <span className="text-xs text-neutral-400">{s.count}</span>
+                  </>
+                )}
               </button>
             </li>
           ))}

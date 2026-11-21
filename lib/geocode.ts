@@ -8,6 +8,8 @@
  *   addresses, which make poor location names.
  */
 
+import type { GeoArea } from "@/types/photo";
+
 const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
 export interface PlaceSuggestion {
@@ -204,4 +206,56 @@ export function reverseGeocode(latitude: number, longitude: number): Promise<Pla
 /** "47.47542, 13.62135" */
 export function formatLatLng(latitude: number, longitude: number): string {
   return `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Areas for the search bar (Geocoding v5: center + bbox)              */
+/* ------------------------------------------------------------------ */
+
+interface AreaFeature {
+  id: string;
+  text: string;
+  place_name: string;
+  place_type: string[];
+  center: [number, number];
+  bbox?: [number, number, number, number];
+  context?: { id: string; text: string }[];
+}
+
+/** Half-size (degrees) of the box around a center when Mapbox returns no bbox */
+const AREA_RADIUS: Record<string, number> = { country: 4, region: 1.5, district: 0.5, place: 0.2, locality: 0.08, neighborhood: 0.04 };
+
+export function areaLabel(a: Pick<GeoArea, "name" | "kind">): string {
+  return a.kind === "country" ? `${a.name} (Country)` : a.name;
+}
+
+/** Countries, regions and cities matching a query, each with a bounding box to fit + filter by */
+export async function geocodeAreas(query: string, signal?: AbortSignal): Promise<GeoArea[]> {
+  const q = query.trim();
+  if (!TOKEN || q.length < 2) return [];
+  const params = new URLSearchParams({
+    access_token: TOKEN,
+    autocomplete: "true",
+    limit: "5",
+    language: "en",
+    types: "country,region,district,place,locality",
+  });
+  const json = await getJson<{ features?: AreaFeature[] }>(
+    `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?${params}`,
+    signal,
+  );
+  return (json.features ?? []).map((f) => {
+    const kind = f.place_type[0];
+    const country = f.context?.find((c) => c.id.startsWith("country."))?.text;
+    const r = AREA_RADIUS[kind] ?? 0.2;
+    const [lng, lat] = f.center;
+    const bbox: GeoArea["bbox"] = f.bbox ?? [lng - r, Math.max(-90, lat - r), lng + r, Math.min(90, lat + r)];
+    return {
+      id: f.id,
+      name: kind === "country" || !country || country === f.text ? f.text : `${f.text}, ${country}`,
+      kind,
+      center: f.center,
+      bbox,
+    };
+  });
 }

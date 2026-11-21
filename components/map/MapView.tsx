@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Map, { Marker, NavigationControl, GeolocateControl, useMap, type ViewStateChangeEvent, type MapLayerMouseEvent } from "react-map-gl";
+import Map, { Marker, NavigationControl, GeolocateControl, Source, Layer, useMap, type ViewStateChangeEvent, type MapLayerMouseEvent } from "react-map-gl";
 import type { Photo } from "@/types/photo";
 import { useMapStore, roundBounds, type Bounds } from "@/store/mapStore";
 import { useClusters, stackOf, imageCount } from "@/hooks/useClusters";
@@ -20,6 +20,8 @@ const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 interface Props {
   photos: Photo[];
   mapStyle?: string;
+  /** Trip list view: [lng, lat] points joined by a route line, in list order */
+  route?: [number, number][];
 }
 
 function readBounds(e: { target: mapboxgl.Map }): Bounds {
@@ -27,7 +29,7 @@ function readBounds(e: { target: mapboxgl.Map }): Bounds {
   return roundBounds({ north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() });
 }
 
-export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dark-v11" }: Props) {
+export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dark-v11", route }: Props) {
   const { [MAP_ID]: map } = useMap();
   const bounds = useMapStore((s) => s.bounds);
   const setViewport = useMapStore((s) => s.setViewport);
@@ -59,6 +61,13 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
   const editing = gpsEdit ? editingLive ?? (editingSnap.current?.id === gpsEdit.photoId ? editingSnap.current : undefined) : undefined;
   const editingStackSize = useMemo(() => (editing ? stackOf(photos, editing).length : 0), [photos, editing]);
   const busy = pickMode || Boolean(gpsEdit);
+  const routeData = useMemo(
+    () =>
+      route && route.length > 1
+        ? { type: "Feature" as const, properties: {}, geometry: { type: "LineString" as const, coordinates: route } }
+        : null,
+    [route],
+  );
 
   const onMove = useCallback((e: ViewStateChangeEvent) => {
     const z = Math.floor(e.viewState.zoom);
@@ -127,6 +136,16 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
     >
       <NavigationControl position="bottom-right" showCompass={false} />
       <GeolocateControl position="bottom-right" />
+
+      {/* Trip list: a subtle dashed line through the saved pins, in list order */}
+      {routeData && (
+        <Source id="trip-route" type="geojson" data={routeData}>
+          <Layer id="trip-route-glow" type="line" layout={{ "line-cap": "round", "line-join": "round" }}
+            paint={{ "line-color": "#fcd34d", "line-width": 6, "line-opacity": 0.15, "line-blur": 2 }} />
+          <Layer id="trip-route-line" type="line" layout={{ "line-cap": "round", "line-join": "round" }}
+            paint={{ "line-color": "#fcd34d", "line-width": 2, "line-opacity": 0.85, "line-dasharray": [2, 2] }} />
+        </Source>
+      )}
 
       {!pickMode && clusters.map((c) =>
         c.kind === "cluster" ? (

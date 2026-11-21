@@ -69,7 +69,21 @@ export interface PhotoFilters {
   tags: string[];
   /** @photographer: exact, case-insensitive */
   photographer: string | null;
+  /** Geographic area picked in the search (country / region / city): pins inside its bbox */
+  area: GeoArea | null;
   bounds?: { north: number; south: number; east: number; west: number };
 }
 
-export const EMPTY_FILTERS: PhotoFilters = { query: "", tags: [], photographer: null };
+export const EMPTY_FILTERS: PhotoFilters = { query: "", tags: [], photographer: null, area: null };
+
+/** A geocoded place used as a search area */
+export interface GeoArea {
+  id: string;
+  /** "Germany", "Frankfurt, Germany" */
+  name: string;
+  /** "country" | "region" | "place" | ... */
+  kind: string;
+  center: [number, number];
+  /** [west, south, east, north] */
+  bbox: [number, number, number, number];
+}
