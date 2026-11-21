@@ -5,7 +5,7 @@ import type { Photo } from "@/types/photo";
 import PhotoCard from "./PhotoCard";
 
 /** דסקטופ: הכרטיסייה צפה מעל ה-Pin */
-export default function PhotoPopup({ photo, onClose }: { photo: Photo; onClose: () => void }) {
+export default function PhotoPopup({ photo, stack, onClose }: { photo: Photo; stack?: Photo[]; onClose: () => void }) {
   return (
     <Popup
       longitude={photo.longitude}
@@ -19,7 +19,7 @@ export default function PhotoPopup({ photo, onClose }: { photo: Photo; onClose: 
       className="storymap-popup"
     >
       <div className="w-[340px] shadow-2xl">
-        <PhotoCard photo={photo} onClose={onClose} />
+        <PhotoCard photo={photo} stack={stack} onClose={onClose} />
       </div>
     </Popup>
   );

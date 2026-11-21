@@ -1,14 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Map, { Marker, NavigationControl, GeolocateControl, useMap, type ViewStateChangeEvent, type MapLayerMouseEvent } from "react-map-gl";
 import type { Photo } from "@/types/photo";
 import { useMapStore, roundBounds, type Bounds } from "@/store/mapStore";
-import { useClusters } from "@/hooks/useClusters";
+import { useClusters, stackOf, imageCount } from "@/hooks/useClusters";
 import PhotoPin from "./PhotoPin";
 import ClusterPin from "./ClusterPin";
 import PhotoPopup from "./PhotoPopup";
 import PickModeBanner from "./PickModeBanner";
+import GpsEditBanner from "./GpsEditBanner";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { MAP_ID } from "./constants";
 
@@ -38,6 +39,9 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
   const pickedLocation = useMapStore((s) => s.pickedLocation);
   const setPicked = useMapStore((s) => s.setPicked);
   const cancelPick = useMapStore((s) => s.cancelPick);
+  const gpsEdit = useMapStore((s) => s.gpsEdit);
+  const setGpsEditPoint = useMapStore((s) => s.setGpsEditPoint);
+  const cancelGpsEdit = useMapStore((s) => s.cancelGpsEdit);
   const isDesktop = useIsDesktop();
 
   // זום שלם — לחישוב מחדש של ה-clusters *תוך כדי* זום, לא רק בסופו
@@ -47,6 +51,14 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
   const byId = useMemo(() => new globalThis.Map(photos.map((p) => [p.id, p])), [photos]);
   const selected = selectedId ? byId.get(selectedId) : undefined;
   const hovered = hoveredId ? byId.get(hoveredId) : undefined;
+  const selectedStack = useMemo(() => (selected ? stackOf(photos, selected) : []), [photos, selected]);
+  // Snapshot: the photo may leave the loaded area while the owner pans to its new spot
+  const editingSnap = useRef<Photo | undefined>(undefined);
+  const editingLive = gpsEdit ? byId.get(gpsEdit.photoId) : undefined;
+  if (editingLive) editingSnap.current = editingLive;
+  const editing = gpsEdit ? editingLive ?? (editingSnap.current?.id === gpsEdit.photoId ? editingSnap.current : undefined) : undefined;
+  const editingStackSize = useMemo(() => (editing ? stackOf(photos, editing).length : 0), [photos, editing]);
+  const busy = pickMode || Boolean(gpsEdit);
 
   const onMove = useCallback((e: ViewStateChangeEvent) => {
     const z = Math.floor(e.viewState.zoom);
@@ -61,22 +73,33 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
 
   const onClick = useCallback(
     (e: MapLayerMouseEvent) => {
-      if (pickMode) setPicked({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
+      if (gpsEdit) setGpsEditPoint({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
+      else if (pickMode) setPicked({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
       else select(null);
     },
-    [pickMode, setPicked, select],
+    [gpsEdit, setGpsEditPoint, pickMode, setPicked, select],
   );
 
   // Esc יוצא ממצב בחירה / סוגר popup
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape") return;
-      if (pickMode) cancelPick();
+      if (gpsEdit) cancelGpsEdit();
+      else if (pickMode) cancelPick();
       else select(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pickMode, cancelPick, select]);
+  }, [gpsEdit, cancelGpsEdit, pickMode, cancelPick, select]);
+
+  // Edit GPS: bring the photo into view
+  const editPhotoId = gpsEdit?.photoId;
+  useEffect(() => {
+    if (!editPhotoId || !map || !gpsEdit) return;
+    const { latitude, longitude } = gpsEdit.original;
+    map.flyTo({ center: [longitude, latitude], zoom: Math.max(map.getZoom(), 14), duration: 800, essential: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editPhotoId, map]);
 
   if (!TOKEN) {
     return (
@@ -94,7 +117,7 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
       initialViewState={{ longitude: 34.85, latitude: 31.5, zoom: 2 }}
       style={{ width: "100%", height: "100%" }}
       projection={{ name: "globe" }}
-      cursor={pickMode ? "crosshair" : undefined}
+      cursor={busy ? "crosshair" : undefined}
       onLoad={(e) => setViewport(readBounds(e), e.target.getZoom())}
       onMove={onMove}
       onMoveEnd={onMoveEnd}
@@ -113,22 +136,38 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
             latitude={c.latitude}
             count={c.count}
             preview={c.preview}
+            dimmed={Boolean(gpsEdit)}
             onClick={() => map?.flyTo({ center: [c.longitude, c.latitude], zoom: c.expansionZoom, duration: 900, essential: true })}
           />
         ) : (
-          <PhotoPin
-            key={c.photo.id}
-            photo={c.photo}
-            highlighted={hoveredId === c.photo.id}
-            selected={selectedId === c.photo.id}
-            onHover={setHovered}
-            onSelect={select}
-          />
+          (() => {
+            // A selected / hovered stack member is shown on top of its pile
+            const top = c.stack.find((p) => p.id === selectedId) ?? c.stack.find((p) => p.id === hoveredId) ?? c.photo;
+            const multi = c.stack.length > 1;
+            const pos = multi && c.stack.some((p) => p.id === selectedId) ? c.stack.indexOf(top) + 1 : undefined;
+            // While editing, the edited photo is drawn by the draggable marker instead
+            const stackLeft = gpsEdit ? c.stack.filter((p) => p.id !== gpsEdit.photoId) : c.stack;
+            if (!stackLeft.length) return null;
+            const shown = stackLeft.includes(top) ? top : stackLeft[0];
+            return (
+              <PhotoPin
+                key={`s-${c.photo.id}`}
+                photo={shown}
+                count={stackLeft.length > 1 ? stackLeft.length : imageCount(stackLeft)}
+                position={gpsEdit ? undefined : pos}
+                highlighted={!gpsEdit && c.stack.some((p) => p.id === hoveredId)}
+                selected={!gpsEdit && c.stack.some((p) => p.id === selectedId)}
+                dimmed={Boolean(gpsEdit)}
+                onHover={setHovered}
+                onSelect={select}
+              />
+            );
+          })()
         ),
       )}
 
       {/* hover מהגלריה על תמונה שנמצאת בתוך cluster → טבעת פועמת במיקום המדויק */}
-      {hovered && !pickMode && (
+      {hovered && !busy && (
         <Marker longitude={hovered.longitude} latitude={hovered.latitude} anchor="center" style={{ zIndex: 30, pointerEvents: "none" }}>
           <span className="relative block h-6 w-6">
             <span className="absolute inset-0 animate-ping rounded-full bg-amber-300/70" />
@@ -138,7 +177,38 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
       )}
 
       {/* במובייל הכרטיסייה היא Drawer (מרונדר ב-page) */}
-      {selected && !pickMode && isDesktop && <PhotoPopup photo={selected} onClose={() => select(null)} />}
+      {selected && !busy && isDesktop && <PhotoPopup photo={selected} stack={selectedStack} onClose={() => select(null)} />}
+
+      {/* Edit GPS: original spot (ghost) + the photo as a draggable pin */}
+      {gpsEdit && editing && (
+        <>
+          <Marker longitude={gpsEdit.original.longitude} latitude={gpsEdit.original.latitude} anchor="center" style={{ zIndex: 35, pointerEvents: "none" }}>
+            <span className="block h-3 w-3 rounded-full border-2 border-white/80 bg-neutral-900/60" />
+          </Marker>
+          <Marker
+            longitude={gpsEdit.point.longitude}
+            latitude={gpsEdit.point.latitude}
+            anchor="bottom"
+            draggable
+            onDragEnd={(e) => setGpsEditPoint({ latitude: e.lngLat.lat, longitude: e.lngLat.lng })}
+            style={{ zIndex: 45, cursor: "grab" }}
+          >
+            <span className="flex flex-col items-center">
+              <span className="block h-14 w-14 overflow-hidden rounded-xl border-[3px] border-amber-300 bg-neutral-800 shadow-[0_8px_24px_rgba(0,0,0,0.6)] ring-4 ring-amber-300/30">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={editing.thumb_url ?? editing.photo_url} alt="" draggable={false} className="h-full w-full object-cover" />
+              </span>
+              <span className="-mt-1 h-3 w-3 rotate-45 bg-amber-300 shadow" />
+            </span>
+          </Marker>
+          <GpsEditBanner
+            photo={editing}
+            point={gpsEdit.point}
+            stackSize={editingStackSize}
+            onSaved={(p) => select(p.id)}
+          />
+        </>
+      )}
 
       {/* מיקום שנבחר ידנית — ניתן לגרירה לכוונון */}
       {pickedLocation && (

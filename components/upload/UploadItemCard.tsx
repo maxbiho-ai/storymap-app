@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { UploadItem, SharedFields, ResolvedLocation } from "@/hooks/useUploadBatch";
 import { resolveTakenAt, formatTakenAt } from "@/lib/time";
 import TagEditor from "./TagEditor";
+import LocationAutocomplete, { PlaceChips } from "@/components/LocationAutocomplete";
 
 interface Props {
   item: UploadItem;
@@ -82,6 +83,11 @@ export default function UploadItemCard({ item, shared, location, picking, disabl
             {locBadge}
           </div>
           {when && <p className="mt-0.5 text-[11px] text-neutral-500">{when}</p>}
+          {location && (
+            <p className="truncate text-[11px] text-neutral-500" title="Location name used for this photo">
+              📍 {item.locationName?.trim() || shared.locationName.trim() || item.autoLocationName || (item.geoKey && item.autoLocationName === undefined ? "Finding place name…" : "No place name")}
+            </p>
+          )}
           {exif?.camera_model && (
             <p className="truncate text-[11px] text-neutral-400">
               {[exif.camera_model, exif.lens].filter(Boolean).join(" · ")}
@@ -113,7 +119,19 @@ export default function UploadItemCard({ item, shared, location, picking, disabl
             <div className="mt-2 space-y-1.5 rounded-lg bg-neutral-50 p-2 dark:bg-neutral-800/50">
               <input className={field} value={item.title ?? ""} onChange={(e) => onPatch({ title: e.target.value })} placeholder={shared.title ? `Title: ${shared.title}` : "Title (this photo only)"} />
               <textarea className={`${field} resize-none`} rows={2} value={item.description ?? ""} onChange={(e) => onPatch({ description: e.target.value })} placeholder={shared.description ? `Description: ${shared.description}` : "Description (this photo only)"} />
-              <input className={field} value={item.locationName ?? ""} onChange={(e) => onPatch({ locationName: e.target.value })} placeholder={shared.locationName ? `Location name: ${shared.locationName}` : "Location name (this photo only)"} />
+              <div>
+                <LocationAutocomplete
+                  value={item.locationName ?? ""}
+                  onChange={(v) => onPatch({ locationName: v })}
+                  proximity={location}
+                  placeholder={shared.locationName || item.autoLocationName ? `Location name: ${shared.locationName || item.autoLocationName}` : "Location name (this photo only)"}
+                  ariaLabel="Location name for this photo"
+                  inputClassName={`${field} pr-7`}
+                />
+                {item.placeSuggestions && item.placeSuggestions.length > 0 && (
+                  <PlaceChips suggestions={item.placeSuggestions} current={item.locationName} onPick={(s) => onPatch({ locationName: s.name })} label="At this GPS" />
+                )}
+              </div>
 
               <div className="pt-1">
                 <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-500">

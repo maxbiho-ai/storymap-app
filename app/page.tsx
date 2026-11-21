@@ -13,6 +13,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { getSupabase } from "@/lib/supabase/client";
 import { usePhotoSearch, escapeLike } from "@/hooks/usePhotoSearch";
 import { useMapStore, padBounds } from "@/store/mapStore";
+import { stackOf } from "@/hooks/useClusters";
 import { MAP_ID } from "@/components/map/constants";
 import type { Photo, PhotoFilters } from "@/types/photo";
 
@@ -55,11 +56,21 @@ function StoryMap() {
     () => ({ ...filters, bounds: bounds ? padBounds(bounds) : undefined }),
     [filters, bounds],
   );
-  const { photos, loading, error, refresh } = usePhotoSearch(query);
+  const { photos: loaded, loading, error, refresh } = usePhotoSearch(query);
+  // Owner edits (location name / GPS) apply at once, before the next query returns them
+  const edits = useMapStore((s) => s.edits);
+  const photos = useMemo(
+    () => (Object.keys(edits).length ? loaded.map((p) => (edits[p.id] ? { ...p, ...edits[p.id] } : p)) : loaded),
+    [loaded, edits],
+  );
+  const gpsEdit = useMapStore((s) => s.gpsEdit);
+  const setCurrentUser = useMapStore((s) => s.setCurrentUser);
   const selectedPhoto = selectedId ? photos.find((p) => p.id === selectedId) : undefined;
+  const selectedStack = useMemo(() => (selectedPhoto ? stackOf(photos, selectedPhoto) : []), [photos, selectedPhoto]);
 
   // Login / logout changes what RLS returns (private photos): reload
   const userId = user?.id ?? null;
+  useEffect(() => setCurrentUser(userId), [userId, setCurrentUser]);
   useEffect(() => {
     refresh();
     if (!userId) setUploadOpen(false);
@@ -181,7 +192,7 @@ function StoryMap() {
       </div>
 
       {/* Top bar */}
-      <header className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start gap-3 p-3 md:p-4 ${pickMode ? "opacity-0" : ""}`}>
+      <header className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start gap-3 p-3 md:p-4 ${pickMode || gpsEdit ? "opacity-0 [&_*]:!pointer-events-none" : ""}`}>
         <div className="pointer-events-auto hidden shrink-0 rounded-2xl bg-neutral-950/80 px-4 py-2.5 shadow-lg backdrop-blur md:block">
           <span className="text-sm font-black tracking-[0.25em] text-white">STORY<span className="text-amber-300">MAP</span></span>
         </div>
@@ -214,7 +225,7 @@ function StoryMap() {
 
       <FloatingGallery photos={photos} loading={loading} />
 
-      {selectedPhoto && !pickMode && <PhotoDrawer photo={selectedPhoto} onClose={() => select(null)} />}
+      {selectedPhoto && !pickMode && !gpsEdit && <PhotoDrawer photo={selectedPhoto} stack={selectedStack} onClose={() => select(null)} />}
 
       {/*
         Upload panel stays mounted while hidden (pick mode), so the compressed photos

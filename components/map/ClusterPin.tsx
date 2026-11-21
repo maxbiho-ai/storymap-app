@@ -10,10 +10,12 @@ interface Props {
   count: number;
   preview: Photo[];
   onClick: () => void;
+  /** Edit-GPS mode: context only, not clickable */
+  dimmed?: boolean;
 }
 
 /** קבוצת תמונות: "ערימת" עד 3 תמונות מוטות + מונה */
-function ClusterPin({ longitude, latitude, count, preview, onClick }: Props) {
+function ClusterPin({ longitude, latitude, count, preview, onClick, dimmed }: Props) {
   const size = count < 10 ? 52 : count < 50 ? 60 : 68;
   const tilts = [-10, 6, -2];
 
@@ -22,6 +24,7 @@ function ClusterPin({ longitude, latitude, count, preview, onClick }: Props) {
       longitude={longitude}
       latitude={latitude}
       anchor="center"
+      style={{ opacity: dimmed ? 0.35 : 1, pointerEvents: dimmed ? "none" : undefined }}
       onClick={(e) => {
         e.originalEvent.stopPropagation();
         onClick();

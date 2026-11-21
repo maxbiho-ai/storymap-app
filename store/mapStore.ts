@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { EMPTY_FILTERS, type PhotoFilters } from "@/types/photo";
+import { EMPTY_FILTERS, type Photo, type PhotoFilters } from "@/types/photo";
 
 export interface Bounds { north: number; south: number; east: number; west: number }
 export interface LatLng { latitude: number; longitude: number }
@@ -36,6 +36,20 @@ interface MapState {
   startPick: () => void;
   cancelPick: () => void;
   setPicked: (loc: LatLng | null) => void;
+
+  /** Logged-in user (owner-only controls on the card) */
+  currentUserId: string | null;
+  setCurrentUser: (id: string | null) => void;
+
+  /** Owner "Edit GPS" mode: a draggable marker on the map for one photo */
+  gpsEdit: { photoId: string; point: LatLng; original: LatLng } | null;
+  startGpsEdit: (photoId: string, original: LatLng) => void;
+  setGpsEditPoint: (point: LatLng) => void;
+  cancelGpsEdit: () => void;
+
+  /** Saved owner edits, merged over the loaded photos until the next query returns them */
+  edits: Record<string, Partial<Photo>>;
+  applyEdit: (id: string, patch: Partial<Photo>) => void;
 }
 
 export const useMapStore = create<MapState>((set) => ({
@@ -55,9 +69,20 @@ export const useMapStore = create<MapState>((set) => ({
 
   pickMode: false,
   pickedLocation: null,
-  startPick: () => set({ pickMode: true, selectedId: null }),
+  startPick: () => set({ pickMode: true, selectedId: null, gpsEdit: null }),
   cancelPick: () => set({ pickMode: false }),
   setPicked: (pickedLocation) => set({ pickedLocation, pickMode: false }),
+
+  currentUserId: null,
+  setCurrentUser: (currentUserId) => set({ currentUserId }),
+
+  gpsEdit: null,
+  startGpsEdit: (photoId, original) => set({ gpsEdit: { photoId, original, point: original }, pickMode: false }),
+  setGpsEditPoint: (point) => set((s) => (s.gpsEdit ? { gpsEdit: { ...s.gpsEdit, point } } : {})),
+  cancelGpsEdit: () => set({ gpsEdit: null }),
+
+  edits: {},
+  applyEdit: (id, patch) => set((s) => ({ edits: { ...s.edits, [id]: { ...s.edits[id], ...patch } } })),
 }));
 
 /** Is a point inside bounds (handles maps crossing the date line) */

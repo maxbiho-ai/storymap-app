@@ -8,6 +8,7 @@ import { runQueue } from "@/lib/queue";
 import { resolveTakenAt } from "@/lib/time";
 import { suggestTags, translateToEnglish } from "@/lib/aiClient";
 import { normalizeTag } from "@/lib/tags";
+import { reverseGeocode, type PlaceSuggestion } from "@/lib/geocode";
 import type { ExtractedExif, Photo } from "@/types/photo";
 import type { LatLng } from "@/store/mapStore";
 
@@ -35,6 +36,12 @@ export interface UploadItem {
   locationName?: string;
   /** Per-photo location override (Lat/Lng inputs or "Pick on map"): beats EXIF GPS */
   manual?: LatLng | null;
+  /** Place name reverse-geocoded from this photo's position (EXIF GPS or picked point) */
+  autoLocationName?: string;
+  /** Name candidates for that position, for one-click acceptance */
+  placeSuggestions?: PlaceSuggestion[];
+  /** Position (rounded) the auto name belongs to */
+  geoKey?: string;
   photo?: Photo;
 }
 
@@ -51,6 +58,10 @@ interface State {
   shared: SharedFields;
   /** Location picked for every photo *without* GPS (never overrides GPS) */
   sharedLocation: LatLng | null;
+  /** The shared location name was filled from GPS, not typed */
+  sharedNameAuto: boolean;
+  /** The user typed in the shared location field: never auto-fill it again */
+  sharedNameTouched: boolean;
   submitting: boolean;
   translating: boolean;
 }
@@ -59,7 +70,7 @@ type Action =
   | { type: "add"; items: UploadItem[] }
   | { type: "patch"; id: string; patch: Partial<UploadItem> }
   | { type: "remove"; id: string }
-  | { type: "shared"; patch: Partial<SharedFields> }
+  | { type: "shared"; patch: Partial<SharedFields>; auto?: boolean }
   | { type: "sharedLocation"; loc: LatLng | null }
   | { type: "submitting"; value: boolean }
   | { type: "translating"; value: boolean }
@@ -81,8 +92,12 @@ function reducer(s: State, a: Action): State {
       return { ...s, items: s.items.map((it) => (it.id === a.id ? { ...it, ...a.patch } : it)) };
     case "remove":
       return { ...s, items: s.items.filter((it) => it.id !== a.id) };
-    case "shared":
-      return { ...s, shared: { ...s.shared, ...a.patch } };
+    case "shared": {
+      if (a.patch.locationName === undefined) return { ...s, shared: { ...s.shared, ...a.patch } };
+      return a.auto
+        ? { ...s, shared: { ...s.shared, ...a.patch }, sharedNameAuto: Boolean(a.patch.locationName) }
+        : { ...s, shared: { ...s.shared, ...a.patch }, sharedNameAuto: false, sharedNameTouched: true };
+    }
     case "sharedLocation":
       return { ...s, sharedLocation: a.loc };
     case "submitting":
@@ -90,7 +105,7 @@ function reducer(s: State, a: Action): State {
     case "translating":
       return { ...s, translating: a.value };
     case "reset":
-      return { items: [], shared: initialShared(a.photographer), sharedLocation: null, submitting: false, translating: false };
+      return { items: [], shared: initialShared(a.photographer), sharedLocation: null, sharedNameAuto: false, sharedNameTouched: false, submitting: false, translating: false };
   }
 }
 
@@ -112,6 +127,13 @@ export function resolveLocation(item: UploadItem, sharedLocation: LatLng | null)
 
 const pick = (override: string | undefined, shared: string) => (override?.trim() ? override.trim() : shared.trim());
 
+/** Location name: the photo's own override → the shared (typed or auto) name → the photo's GPS place name */
+export function effectiveLocationName(item: UploadItem, shared: SharedFields): string {
+  return pick(item.locationName, shared.locationName) || item.autoLocationName || "";
+}
+
+const geoKeyOf = (l: LatLng) => `${l.latitude.toFixed(4)},${l.longitude.toFixed(4)}`;
+
 export function useUploadBatch(opts: {
   userId: string;
   defaultPhotographer: string;
@@ -122,6 +144,8 @@ export function useUploadBatch(opts: {
     items: [],
     shared: initialShared(opts.defaultPhotographer),
     sharedLocation: null,
+    sharedNameAuto: false,
+    sharedNameTouched: false,
     submitting: false,
     translating: false,
   }));
@@ -205,7 +229,7 @@ export function useUploadBatch(opts: {
         takenAt: taken_at,
         lat: loc?.latitude ?? null,
         lng: loc?.longitude ?? null,
-        locationName: pick(current.locationName, s.shared.locationName) || null,
+        locationName: effectiveLocationName(current, s.shared) || null,
         title: pick(current.title, s.shared.title) || null,
       });
       // Merge: keep anything the user already added
@@ -214,6 +238,35 @@ export function useUploadBatch(opts: {
       patch(item.id, { tags: [...new Set([...latest.tags, ...suggested])], tagState: "done" });
     });
   }, [state.items, state.sharedLocation, patch]);
+
+  // Reverse-geocode each photo position (EXIF GPS, manual or picked) → an official place name
+  useEffect(() => {
+    for (const it of state.items) {
+      if (!it.compressed || it.status === "done") continue;
+      const loc = resolveLocation(it, state.sharedLocation);
+      const key = loc ? geoKeyOf(loc) : undefined;
+      if (!loc || key === it.geoKey) continue;
+      patch(it.id, { geoKey: key, autoLocationName: undefined, placeSuggestions: undefined });
+      void reverseGeocode(loc.latitude, loc.longitude).then((s) => {
+        const latest = stateRef.current.items.find((i) => i.id === it.id);
+        if (!latest || latest.geoKey !== key) return; // moved again meanwhile
+        patch(it.id, { autoLocationName: s[0]?.name ?? "", placeSuggestions: s });
+      });
+    }
+  }, [state.items, state.sharedLocation, patch]);
+
+  // Pre-fill the shared Location field when every photo resolves to the same place,
+  // unless the user already typed there. Mixed places → each photo keeps its own name.
+  useEffect(() => {
+    if (state.sharedNameTouched) return;
+    const located = state.items.filter((i) => i.status !== "done" && i.compressed && resolveLocation(i, state.sharedLocation));
+    if (!located.length || located.some((i) => i.autoLocationName === undefined)) return; // still resolving
+    const names = new Set(located.map((i) => i.autoLocationName ?? ""));
+    const common = names.size === 1 ? [...names][0] : "";
+    if (common !== state.shared.locationName && (state.sharedNameAuto || !state.shared.locationName)) {
+      dispatch({ type: "shared", patch: { locationName: common }, auto: true });
+    }
+  }, [state.items, state.sharedLocation, state.shared.locationName, state.sharedNameAuto, state.sharedNameTouched]);
 
   const removeItem = useCallback((id: string) => {
     const it = stateRef.current.items.find((i) => i.id === id);
@@ -283,7 +336,7 @@ export function useUploadBatch(opts: {
           taken_tz,
           title: en(pick(it.title, s.shared.title)),
           description: en(pick(it.description, s.shared.description)),
-          location_name: pick(it.locationName, s.shared.locationName) || null,
+          location_name: effectiveLocationName(latest, stateRef.current.shared) || null,
           photographer_name: photographer,
           tags: latest.tags,
           is_private: s.shared.isPrivate,

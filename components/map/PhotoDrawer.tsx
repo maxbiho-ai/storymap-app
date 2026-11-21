@@ -5,7 +5,7 @@ import type { Photo } from "@/types/photo";
 import PhotoCard from "./PhotoCard";
 
 /** מובייל: הכרטיסייה עולה מלמטה; גרירה למטה (או ×) סוגרת */
-export default function PhotoDrawer({ photo, onClose }: { photo: Photo; onClose: () => void }) {
+export default function PhotoDrawer({ photo, stack, onClose }: { photo: Photo; stack?: Photo[]; onClose: () => void }) {
   const startY = useRef<number | null>(null);
   const [dragY, setDragY] = useState(0);
 
@@ -27,7 +27,7 @@ export default function PhotoDrawer({ photo, onClose }: { photo: Photo; onClose:
       >
         <div className="relative">
           <span className="absolute inset-x-0 top-2 z-10 mx-auto h-1 w-10 rounded-full bg-white/50" />
-          <PhotoCard photo={photo} onClose={onClose} />
+          <PhotoCard photo={photo} stack={stack} onClose={onClose} />
         </div>
       </div>
     </div>

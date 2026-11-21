@@ -5,6 +5,7 @@ import { useUploadBatch, resolveLocation, MAX_BATCH } from "@/hooks/useUploadBat
 import type { LatLng } from "@/store/mapStore";
 import type { Photo } from "@/types/photo";
 import UploadItemCard from "./UploadItemCard";
+import LocationAutocomplete, { PlaceChips } from "@/components/LocationAutocomplete";
 
 interface Props {
   userId: string;
@@ -84,6 +85,11 @@ export default function BatchUploader({ userId, defaultPhotographer, pickedLocat
   const busy = state.submitting;
   const noGps = state.items.filter((i) => i.compressed && i.exif && (i.exif.latitude == null || i.exif.longitude == null) && !i.manual);
   const full = counts.total >= MAX_BATCH;
+  const pending = state.items.filter((i) => i.status !== "done");
+  const firstLoc = pending.map((i) => resolveLocation(i, state.sharedLocation)).find(Boolean) ?? null;
+  // One-click names for the shared field: only when all photos sit at one place
+  const geoKeys = new Set(pending.filter((i) => i.geoKey).map((i) => i.geoKey));
+  const sharedSuggestions = geoKeys.size === 1 ? pending.find((i) => i.placeSuggestions?.length)?.placeSuggestions ?? [] : [];
 
   let cta = `Upload ${counts.uploadable} photo${counts.uploadable === 1 ? "" : "s"}`;
   if (state.translating) cta = "Translating to English…";
@@ -119,8 +125,22 @@ export default function BatchUploader({ userId, defaultPhotographer, pickedLocat
               <input className={input} value={state.shared.title} onChange={(e) => batch.setShared({ title: e.target.value })} placeholder="Title" disabled={busy} />
               <textarea className={`${input} resize-none`} rows={2} value={state.shared.description} onChange={(e) => batch.setShared({ description: e.target.value })} placeholder="Description" disabled={busy} />
               <div>
-                <input className={input} value={state.shared.locationName} onChange={(e) => batch.setShared({ locationName: e.target.value })} placeholder="Location name (e.g. Frankfurt am Main)" disabled={busy} />
-                <p className="mt-1 text-[11px] text-neutral-500">Used for search. Pins always sit on each photo&apos;s GPS position.</p>
+                <LocationAutocomplete
+                  value={state.shared.locationName}
+                  onChange={(v) => batch.setShared({ locationName: v })}
+                  proximity={firstLoc}
+                  placeholder={counts.total > 1 ? "Location name (empty = each photo's own GPS place)" : "Location name (e.g. Hallstatt, Austria)"}
+                  ariaLabel="Location name"
+                  disabled={busy}
+                  inputClassName={`${input} pr-8`}
+                />
+                {sharedSuggestions.length > 0 && (
+                  <PlaceChips suggestions={sharedSuggestions} current={state.shared.locationName} onPick={(s) => batch.setShared({ locationName: s.name })} label="At this GPS" />
+                )}
+                <p className="mt-1 text-[11px] text-neutral-500">
+                  {state.sharedNameAuto ? "Filled in from the photo's GPS. Edit it or pick another place. " : ""}
+                  Used for search. Pins always sit on each photo&apos;s GPS position.
+                </p>
               </div>
               <input className={input} value={state.shared.photographer} onChange={(e) => batch.setShared({ photographer: e.target.value })} placeholder="Photographer name" disabled={busy} aria-label="Photographer name" />
               <label className="flex items-center gap-2 text-sm">
