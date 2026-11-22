@@ -37,7 +37,8 @@ export async function geminiJson<T>(parts: Part[], schema: object, timeoutMs = G
         contents: [{ role: "user", parts }],
         generationConfig: {
           temperature: 0.2,
-          thinkingConfig: { thinkingLevel: thinkingLevelFor(model) },
+          // gemini-2.x takes a token budget (0 = no thinking), gemini-3.x a level
+          thinkingConfig: /^gemini-2\./.test(model) ? { thinkingBudget: 0 } : { thinkingLevel: thinkingLevelFor(model) },
           responseMimeType: "application/json",
           responseSchema: schema,
         },

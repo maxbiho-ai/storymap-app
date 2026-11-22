@@ -15,6 +15,8 @@
  *   --ai                  Gemini title + tags (no story), ~4s pacing, retry with backoff on 429
  *   --max-mb=<n>          size target for the stored main file (default 1.5, 0 = off: 3840px q92 4:4:4)
  *   --allow-faces         import photos with recognizable human faces too (skipped by default)
+ *   --max-ai-calls=<n>    stop cleanly after n Gemini calls in this run (default 200, 0 = no cap); re-run to resume
+ *   --after=<source_key>  with --prune-faces: only check pins whose source_key sorts after this one (resume)
  *   --prune-faces         audit pins already imported from --dir for recognizable faces; with --dry-run only lists them,
  *                         otherwise deletes the flagged pins (row + image + thumbnail)
  *   --timelapse-hero      import the middle frame of each timelapse / sequence folder (#timelapse); folders are skipped otherwise
@@ -60,6 +62,8 @@ interface Args {
   allowFaces: boolean;
   timelapseHero: boolean;
   pruneFaces: boolean;
+  maxAiCalls: number;
+  after: string | null;
   country: string | null;
   email: string;
   ownerId: string | null;
@@ -81,6 +85,7 @@ function parseArgs(argv: string[]): Args {
   const limit = Number(str("limit") ?? 0);
   const maxMb = str("max-mb") == null ? 1.5 : Number(str("max-mb"));
   if (!Number.isFinite(limit) || limit < 0) fail("--limit must be a positive number");
+  if (!Number.isFinite(Number(str("max-ai-calls") ?? 200)) || Number(str("max-ai-calls") ?? 200) < 0) fail("--max-ai-calls must be a number (0 = no cap)");
   if (!Number.isFinite(maxMb) || maxMb < 0) fail("--max-mb must be a number (0 = off)");
   return {
     dir: dir!,
@@ -93,6 +98,8 @@ function parseArgs(argv: string[]): Args {
     allowFaces: flags.has("allow-faces"),
     timelapseHero: flags.has("timelapse-hero"),
     pruneFaces: flags.has("prune-faces"),
+    maxAiCalls: str("max-ai-calls") == null ? 200 : Number(str("max-ai-calls")),
+    after: str("after"),
     country: str("country"),
     email: str("email") ?? "maxbiho@gmail.com",
     ownerId: str("owner-id"),
@@ -403,6 +410,28 @@ async function encode(buf: Buffer, wall: string | null, maxMb: number): Promise<
 // Gemini: title + tags only, paced, retried on 429
 // ---------------------------------------------------------------------------
 
+/** Fast model for batch work: no heavy-model rate limits or timeouts */
+const CLI_GEMINI_MODEL = "gemini-2.5-flash";
+let aiCalls = 0;
+let aiCap = 200;
+class AiCapReached extends Error {}
+let PROJECT_MODEL: string | undefined; // set in main(): what the app itself uses (may be unset = its default)
+let modelSwitched = false;
+/** Google retires models for new keys (HTTP 404): fall back once to the project's own model */
+function fallbackModel(msg: string): boolean {
+  if (modelSwitched || !/HTTP 404/.test(msg)) return false;
+  modelSwitched = true;
+  if (PROJECT_MODEL) process.env.GEMINI_MODEL = PROJECT_MODEL;
+  else delete process.env.GEMINI_MODEL;
+  console.warn(`    ${CLI_GEMINI_MODEL} is not available for this API key: falling back to ${PROJECT_MODEL ?? "the app default model"}`);
+  return true;
+}
+/** Counts every Gemini request (retries included); throws once the --max-ai-calls cap is used up */
+function countAiCall(): void {
+  if (aiCap > 0 && aiCalls >= aiCap) throw new AiCapReached(`AI call cap (${aiCap}) reached`);
+  aiCalls++;
+}
+
 const AI_PACE_MS = 4000;
 let lastAiAt = 0;
 
@@ -424,6 +453,7 @@ const CLI_AI_TIMEOUT_MS = 30_000;
 async function faceCheck(thumb: Buffer): Promise<boolean | null> {
   let retriedTransient = false;
   for (let attempt = 0; attempt < 6; attempt++) {
+    countAiCall();
     await paceAi();
     try {
       const r = await geminiJson<{ hasRecognizableFaces?: boolean }>(
@@ -444,6 +474,7 @@ async function faceCheck(thumb: Buffer): Promise<boolean | null> {
         await sleep(backoff);
         continue;
       }
+      if (fallbackModel(msg)) continue;
       if (!retriedTransient && isTransient(err)) {
         retriedTransient = true;
         console.log(`    Gemini timeout/network error (${msg.slice(0, 60)}), retrying once…`);
@@ -462,6 +493,7 @@ async function aiTitleTags(thumb: Buffer, takenAt: string | null, lat: number, l
   if (wait > 0) await sleep(wait);
   let retriedTransient = false;
   for (let attempt = 0; attempt < 6; attempt++) {
+    countAiCall();
     lastAiAt = Date.now();
     try {
       const r = await aiEnrich({ imageB64: thumb.toString("base64"), takenAt, lat, lng, locationName, title: null, story: null, detectFaces }, extra, CLI_AI_TIMEOUT_MS, { rethrow: true, capMs: CLI_AI_TIMEOUT_MS });
@@ -474,6 +506,7 @@ async function aiTitleTags(thumb: Buffer, takenAt: string | null, lat: number, l
         await sleep(backoff);
         continue;
       }
+      if (fallbackModel(msg)) continue;
       if (!retriedTransient && isTransient(err)) {
         retriedTransient = true;
         console.log(`    Gemini timeout/network error (${msg.slice(0, 60)}), retrying once…`);
@@ -559,6 +592,7 @@ async function pruneFaces(args: Args, tripName: string): Promise<void> {
       .select("id, source_key, title, location_name, storage_path, thumb_url, photo_url")
       .eq("user_id", owner)
       .like("source_key", pattern)
+      .gt("source_key", args.after ?? "")
       .order("source_key")
       .range(from, from + 999);
     if (error) {
@@ -574,6 +608,8 @@ async function pruneFaces(args: Args, tripName: string): Promise<void> {
   const flagged: Pin[] = [];
   const unchecked: Pin[] = [];
   let n = 0;
+  let capHit = false;
+  let lastChecked: string | null = null;
   for (const p of pins) {
     n++;
     const img = p.thumb_url ?? p.photo_url;
@@ -585,14 +621,27 @@ async function pruneFaces(args: Args, tripName: string): Promise<void> {
         faces = await faceCheck(Buffer.from(await res.arrayBuffer()));
         break;
       } catch (err) {
+        if (err instanceof AiCapReached) {
+          capHit = true;
+          break;
+        }
         console.warn(`    could not load ${img}: ${(err as Error).message}${tryNo === 0 ? " (retrying once)" : ""}`);
       }
     }
+    if (capHit) {
+      n--;
+      break;
+    }
+    lastChecked = p.source_key;
     if (faces === true) flagged.push(p);
     else if (faces === null) unchecked.push(p);
     console.log(`[${n}/${pins.length}] ${p.source_key}: ${faces === true ? "FACES" : faces === null ? "unchecked" : "ok"}`);
   }
 
+  if (capHit) {
+    console.log(`\n⏸ Stopped: reached --max-ai-calls=${aiCap} (${aiCalls} Gemini calls) after checking ${n} of ${pins.length} pins.`);
+    console.log(`  Resume with: --after="${lastChecked ?? args.after ?? ""}"`);
+  }
   console.log(`\nFlagged as having recognizable human faces: ${flagged.length}`);
   flagged.forEach((p, i) => console.log(`  ${i + 1}. id=${p.id}\n     source_key=${p.source_key}\n     title=${p.title ?? "-"}  location=${p.location_name ?? "-"}`));
   if (unchecked.length) {
@@ -623,7 +672,10 @@ async function pruneFaces(args: Args, tripName: string): Promise<void> {
 
 async function main() {
   loadEnv();
+  PROJECT_MODEL = process.env.GEMINI_MODEL;
+  process.env.GEMINI_MODEL = CLI_GEMINI_MODEL; // CLI only: the web app keeps its own model
   const args = parseArgs(process.argv.slice(2));
+  aiCap = args.maxAiCalls;
   const root = path.resolve(args.dir);
   const st = await fs.stat(root).catch(() => null);
   if (!st?.isDirectory()) fail(`Not a folder: ${root}`);
@@ -690,6 +742,7 @@ async function main() {
   const photographer = process.env.EXTERNAL_DEFAULT_PHOTOGRAPHER || "Max Bihovskiy";
 
   let i = 0;
+  let capHit = false;
   for (const cand of list) {
     i++;
     const tag = `[${i}/${list.length}]`;
@@ -829,6 +882,11 @@ async function main() {
       stats.new++;
       console.log(`${tag} ${display}: imported "${title ?? ""}" (${mb} MB, ${enc.width}x${enc.height}, q${enc.quality}, ${loc.tier})`);
     } catch (err) {
+      if (err instanceof AiCapReached) {
+        capHit = true;
+        console.log(`${tag} ${display}: not processed, AI call cap reached`);
+        break;
+      }
       stats.failed++;
       console.error(`${tag} ${display}: FAILED ${(err as Error).message}`);
     }
@@ -859,6 +917,9 @@ async function main() {
     faceUnknownFiles.forEach((f) => console.log(`  - ${f}`));
   }
   console.log(`\nTimelapse / sequence folders ${args.timelapseHero ? "reduced to one frame" : "skipped"}: ${tl.size}${tlPhotos ? ` (${tlPhotos} edited photos inside)` : ""}. Photos with faces skipped: ${stats.faces}.`);
+  if (capHit) {
+    console.log(`\n⏸ Stopped: reached --max-ai-calls=${aiCap} (${aiCalls} Gemini calls) after ${i - 1} of ${list.length} photos. Nothing is half-uploaded; run the same command again to resume (finished photos show as unchanged and cost no AI calls).`);
+  }
   console.log(
     `\nDone: ${stats.new} ${args.dryRun ? "to import" : "imported"}, ${stats.update} ${args.dryRun ? "to update" : "updated"}, ${stats.unchanged} unchanged, ${stats.skipped} without a location, ${stats.failed} failed.` +
       `  GPS tiers: EXIF ${tierCount.exif}, phone ${tierCount.phone}, folder ${tierCount.folder}.` +
