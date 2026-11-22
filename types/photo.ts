@@ -40,6 +40,8 @@ export interface Photo {
 
   /** Field notes: parking, walking distance, trail access (migration 007) */
   access_info: string | null;
+  /** Archive importer: canonical "<trip>/<subfolder>/<name>" key (migration 008) */
+  source_key?: string | null;
   /** Field notes: permit, drone rules, tickets */
   permit_info: string | null;
 }

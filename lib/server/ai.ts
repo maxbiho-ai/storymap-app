@@ -198,6 +198,8 @@ async function aiTranslateInner(texts: string[]): Promise<{ texts: string[]; tra
 export interface EnrichInput extends AiTagsInput {
   /** Title sent by the caller (translated, never replaced). null = generate one */
   title: string | null;
+  /** Also ask whether the photo shows recognizable human faces (result.hasFaces) */
+  detectFaces?: boolean;
 }
 
 /** Does the text talk about parking, access, tickets, permits or drones? (skips the extraction otherwise) */
@@ -248,6 +250,8 @@ export async function aiFieldNotes(text: string | null): Promise<FieldNotesResul
 }
 
 export interface EnrichResult extends FieldNotesResult {
+  /** null = not asked or unknown */
+  hasFaces: boolean | null;
   story: string | null;
   title: string | null;
   tags: string[];
@@ -261,12 +265,12 @@ export interface EnrichResult extends FieldNotesResult {
  * One structured-JSON call instead of three parallel ones. Never throws: on a missing key,
  * timeout, bad JSON or any model error it returns the originals + time-based tags.
  */
-export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutMs?: number): Promise<EnrichResult> {
+export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutMs?: number, opts?: { rethrow?: boolean }): Promise<EnrichResult> {
   const { lat, lng, takenAt } = input;
   const located = lat != null && lng != null;
   const fallback = (): EnrichResult => {
     const t = timeBasedTags({ takenAt, lat, lng }, extraTags);
-    return { story: input.story ?? null, title: input.title ?? null, tags: t.tags, phase: t.phase, translated: false, titleGenerated: false, tagged: false, accessInfo: null, permitInfo: null };
+    return { story: input.story ?? null, title: input.title ?? null, tags: t.tags, phase: t.phase, translated: false, titleGenerated: false, tagged: false, accessInfo: null, permitInfo: null, hasFaces: null };
   };
   if (!geminiConfigured() || !input.imageB64) return fallback();
 
@@ -291,13 +295,16 @@ export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutM
       needTranslate
         ? "story: the post translated to natural, fluent English; keep tone, line breaks, emojis, common English place names; use plain hyphens, never long dashes."
         : "story: return the post unchanged.",
+      input.detectFaces
+        ? "hasRecognizableFaces: true if the photo is a portrait, group shot, selfie or shows recognizable human faces; false for landscapes, wildlife, architecture, or tiny distant figures in a vast landscape."
+        : "",
       timeContext,
       input.locationName ? `Location: ${input.locationName}.` : "",
       input.title ? `Given title (any language): ${input.title}` : "",
       story ? `Post (any language): ${story.slice(0, 4000)}` : "Post: (none)",
     ].filter(Boolean).join("\n");
 
-    const out = await geminiJson<{ tags?: string[]; title?: string; story?: string; titleTranslated?: string; accessInfo?: string; permitInfo?: string }>(
+    const out = await geminiJson<{ hasRecognizableFaces?: boolean; tags?: string[]; title?: string; story?: string; titleTranslated?: string; accessInfo?: string; permitInfo?: string }>(
       [{ inline_data: { mime_type: "image/jpeg", data: input.imageB64 } }, { text: prompt }],
       {
         type: "OBJECT",
@@ -308,8 +315,9 @@ export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutM
           titleTranslated: { type: "STRING" },
           accessInfo: { type: "STRING" },
           permitInfo: { type: "STRING" },
+          ...(input.detectFaces ? { hasRecognizableFaces: { type: "BOOLEAN" } } : {}),
         },
-        required: ["tags", "title", "story", "titleTranslated", "accessInfo", "permitInfo"],
+        required: ["tags", "title", "story", "titleTranslated", "accessInfo", "permitInfo", ...(input.detectFaces ? ["hasRecognizableFaces"] : [])],
       },
       timeoutMs,
     );
@@ -332,10 +340,12 @@ export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutM
       translated: Boolean(translatedStory || translatedTitle),
       titleGenerated: generated != null,
       tagged: suggested.length > 0,
+      hasFaces: input.detectFaces && typeof out.hasRecognizableFaces === "boolean" ? out.hasRecognizableFaces : null,
       accessInfo: wantNotes ? cleanNote(out.accessInfo) : null,
       permitInfo: wantNotes ? cleanNote(out.permitInfo) : null,
     };
   } catch (err) {
+    if (opts?.rethrow) throw err; // batch importers retry on 429 themselves
     console.error("[ai/enrich] fallback to originals + time-based tags:", err);
     return fallback();
   }
