@@ -4,7 +4,7 @@ import { getSupabase } from "@/lib/supabase/client";
 import { useMapStore } from "@/store/mapStore";
 import type { Photo } from "@/types/photo";
 
-export type OwnerPatch = Partial<Pick<Photo, "location_name" | "latitude" | "longitude" | "is_manual_location">>;
+export type OwnerPatch = Partial<Pick<Photo, "location_name" | "latitude" | "longitude" | "is_manual_location" | "access_info" | "permit_info">>;
 
 /**
  * Owner edit of a photo row. Security is enforced by RLS ("Users can update their own photos":
@@ -15,6 +15,9 @@ export async function updateOwnPhoto(id: string, patch: OwnerPatch): Promise<Pho
   if (patch.latitude != null && (!Number.isFinite(patch.latitude) || Math.abs(patch.latitude) > 90)) throw new Error("Invalid latitude");
   if (patch.longitude != null && (!Number.isFinite(patch.longitude) || Math.abs(patch.longitude) > 180)) throw new Error("Invalid longitude");
   if (patch.location_name != null) patch = { ...patch, location_name: patch.location_name.trim() || null };
+  for (const k of ["access_info", "permit_info"] as const) {
+    if (patch[k] !== undefined) patch = { ...patch, [k]: patch[k]?.trim().slice(0, 600) || null };
+  }
 
   const { data, error } = await getSupabase().from("photos").update(patch).eq("id", id).select("*").maybeSingle();
   if (error) throw new Error(error.message);

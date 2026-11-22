@@ -7,6 +7,8 @@ import { useMapStore } from "@/store/mapStore";
 import SocialActions from "@/components/social/SocialActions";
 import CommentsSection from "@/components/social/CommentsSection";
 import DeleteDialog from "@/components/social/DeleteDialog";
+import FieldNotes from "./FieldNotes";
+import { streetViewUrl } from "@/lib/walk";
 
 export interface Slide {
   src: string;
@@ -51,6 +53,7 @@ export default function Lightbox({ slides, startIndex, onClose }: Props) {
   const [deleting, setDeleting] = useState(false);
   const photo = slide?.photo;
   const isOwner = Boolean(photo && me && me === photo.user_id);
+  const startWalk = useMapStore((s) => s.startWalk);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -137,6 +140,32 @@ export default function Lightbox({ slides, startIndex, onClose }: Props) {
             onToggleComments={() => setCommentsOpen((o) => !o)}
             onDelete={isOwner ? () => setDeleting(true) : undefined}
           />
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            <a
+              href={streetViewUrl(photo.latitude, photo.longitude)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex h-9 items-center gap-1.5 rounded-full bg-black/55 px-3 text-sm text-white backdrop-blur transition hover:bg-black/80"
+            >
+              🧍 Street View
+            </a>
+            <button
+              type="button"
+              onClick={() => {
+                startWalk(photo);
+                onClose();
+              }}
+              className="flex h-9 items-center gap-1.5 rounded-full bg-black/55 px-3 text-sm text-white backdrop-blur transition hover:bg-black/80"
+            >
+              🥾 Nearby Photo Walk
+            </button>
+          </div>
+        </div>
+      )}
+
+      {photo && (photo.access_info || photo.permit_info || isOwner) && (
+        <div className="absolute bottom-24 left-3 z-20 w-[min(24rem,calc(100vw-1.5rem))]">
+          <FieldNotes photo={photo} isOwner={isOwner} overlay />
         </div>
       )}
 

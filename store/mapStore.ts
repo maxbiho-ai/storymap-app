@@ -2,6 +2,10 @@
 
 import { create } from "zustand";
 import { EMPTY_FILTERS, type Photo, type PhotoFilters } from "@/types/photo";
+import { EMPTY_GEAR, type GearFilters } from "@/lib/gear";
+
+export type MapMode = "dark" | "satellite" | "terrain";
+export const DEFAULT_WALK_RADIUS_KM = 15;
 
 export interface Bounds { north: number; south: number; east: number; west: number }
 export interface LatLng { latitude: number; longitude: number }
@@ -63,6 +67,22 @@ interface MapState {
   commentsFor: string | null;
   openComments: (photoId: string | null) => void;
 
+  /** Base map: dark vector, satellite hybrid, or satellite + 3D terrain */
+  mapMode: MapMode;
+  setMapMode: (m: MapMode) => void;
+
+  /** Lighting / long exposure / lens filters (applied client-side to the loaded pins) */
+  gear: GearFilters;
+  setGear: (g: GearFilters) => void;
+
+  /** Nearby Photo Walk: pins within radiusKm of the origin pin, ordered by shooting light */
+  walk: { origin: Photo; radiusKm: number } | null;
+  walkStops: Photo[];
+  startWalk: (origin: Photo) => void;
+  setWalkRadius: (km: number) => void;
+  setWalkStops: (p: Photo[]) => void;
+  endWalk: () => void;
+
   /** A guest tried a signed-in action (like, save, comment): page opens the login modal */
   loginRequest: number;
   requestLogin: () => void;
@@ -105,10 +125,23 @@ export const useMapStore = create<MapState>((set) => ({
     set((s) => ({ deleted: { ...s.deleted, [id]: true }, selectedId: s.selectedId === id ? null : s.selectedId, hoveredId: s.hoveredId === id ? null : s.hoveredId })),
 
   activeCollection: null,
-  setActiveCollection: (activeCollection) => set({ activeCollection }),
+  setActiveCollection: (activeCollection) => set((s) => (activeCollection ? { activeCollection, walk: null, walkStops: [] } : { activeCollection })),
 
   commentsFor: null,
   openComments: (commentsFor) => set({ commentsFor }),
+
+  mapMode: "dark",
+  setMapMode: (mapMode) => set({ mapMode }),
+
+  gear: EMPTY_GEAR,
+  setGear: (gear) => set({ gear }),
+
+  walk: null,
+  walkStops: [],
+  startWalk: (origin) => set((s) => ({ walk: { origin, radiusKm: s.walk?.radiusKm ?? DEFAULT_WALK_RADIUS_KM }, walkStops: [], activeCollection: null })),
+  setWalkRadius: (radiusKm) => set((s) => (s.walk ? { walk: { ...s.walk, radiusKm } } : {})),
+  setWalkStops: (walkStops) => set({ walkStops }),
+  endWalk: () => set({ walk: null, walkStops: [] }),
 
   loginRequest: 0,
   requestLogin: () => set((s) => ({ loginRequest: s.loginRequest + 1 })),

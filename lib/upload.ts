@@ -19,6 +19,8 @@ export interface UploadFields {
   photographer_name: string | null;
   tags: string[];
   is_private: boolean;
+  access_info?: string | null;
+  permit_info?: string | null;
 }
 
 /**

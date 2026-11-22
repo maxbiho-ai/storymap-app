@@ -200,7 +200,54 @@ export interface EnrichInput extends AiTagsInput {
   title: string | null;
 }
 
-export interface EnrichResult {
+/** Does the text talk about parking, access, tickets, permits or drones? (skips the extraction otherwise) */
+export const FIELD_NOTE_HINT =
+  /park|walk|hike|trail|minutes?\b|\bmin\b|\bkm\b|\bmiles?\b|\bmetres?\b|\bmeters?\b|ticket|permit|licen[cs]e|\bfees?\b|entran|admission|entry|drone|uav|no.?fly|reserv|booking|toll|חני|גישה|כרטיס|היתר|רחפן|הליכה|דקות|כניסה|תשלום/i;
+
+export interface FieldNotesResult {
+  /** Parking & access: where to park, walking distance, trail / road conditions */
+  accessInfo: string | null;
+  /** Permit / drone / ticket: fees, permits, drone rules */
+  permitInfo: string | null;
+}
+
+/** One short English sentence fragment, or null */
+export function cleanNote(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const s = noLongDashes(raw).replace(/\s+/g, " ").replace(/^["'“”]+|["'“”]+$/g, "").trim();
+  if (!s || /^(none|n\/a|null|not mentioned|unknown|-)$/i.test(s)) return null;
+  return s.slice(0, 300);
+}
+
+const FIELD_NOTE_RULES = [
+  "accessInfo (Parking & Access): ONLY what the text says about where to park, walking distance or time, trail / road conditions, or how to get there.",
+  "permitInfo (Permit / Drone / Ticket): ONLY what the text says about tickets, entry fees, permits, reservations, or drone rules.",
+  "Each: one or two concise English sentences (max 160 characters), plain hyphens only, no emojis. Never invent facts. Empty string if the text doesn't mention it.",
+];
+
+
+/** Text-only extraction for browser uploads (the photo's description). Never throws */
+export async function aiFieldNotes(text: string | null): Promise<FieldNotesResult> {
+  const empty: FieldNotesResult = { accessInfo: null, permitInfo: null };
+  const t = text?.trim();
+  if (!t || !geminiConfigured() || !FIELD_NOTE_HINT.test(t)) return empty;
+  try {
+    const out = await geminiJson<{ accessInfo?: string; permitInfo?: string }>(
+      [{ text: ["Extract photographer field notes from this post (any language).", ...FIELD_NOTE_RULES, "", `Post: ${t.slice(0, 4000)}`].join("\n") }],
+      {
+        type: "OBJECT",
+        properties: { accessInfo: { type: "STRING" }, permitInfo: { type: "STRING" } },
+        required: ["accessInfo", "permitInfo"],
+      },
+    );
+    return { accessInfo: cleanNote(out.accessInfo), permitInfo: cleanNote(out.permitInfo) };
+  } catch (err) {
+    console.error("[ai/field-notes]", err);
+    return empty;
+  }
+}
+
+export interface EnrichResult extends FieldNotesResult {
   story: string | null;
   title: string | null;
   tags: string[];
@@ -219,7 +266,7 @@ export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutM
   const located = lat != null && lng != null;
   const fallback = (): EnrichResult => {
     const t = timeBasedTags({ takenAt, lat, lng }, extraTags);
-    return { story: input.story ?? null, title: input.title ?? null, tags: t.tags, phase: t.phase, translated: false, titleGenerated: false, tagged: false };
+    return { story: input.story ?? null, title: input.title ?? null, tags: t.tags, phase: t.phase, translated: false, titleGenerated: false, tagged: false, accessInfo: null, permitInfo: null };
   };
   if (!geminiConfigured() || !input.imageB64) return fallback();
 
@@ -233,8 +280,10 @@ export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutM
 
     const story = input.story?.trim() || null;
     const needTranslate = Boolean(story && !looksEnglish(story)) || Boolean(input.title && !looksEnglish(input.title));
+    const wantNotes = Boolean(story && FIELD_NOTE_HINT.test(story));
     const prompt = [
-      "You process one photo for a photography map. Return JSON with: tags, title, story, titleTranslated.",
+      "You process one photo for a photography map. Return JSON with: tags, title, story, titleTranslated, accessInfo, permitInfo.",
+      wantNotes ? FIELD_NOTE_RULES.join(" ") : "accessInfo and permitInfo: return empty strings.",
       "tags: 4 to 10 short English tags, lowercase, no spaces (milkyway, goldenhour), no '#'. Cover subject, scene, light/sky, weather, season, a landmark only if sure. No generic tags (photography, travel, nature, beautiful), camera brands or names of people.",
       input.title
         ? "title: return an empty string. titleTranslated: the given title translated to natural English (unchanged if already English)."
@@ -248,7 +297,7 @@ export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutM
       story ? `Post (any language): ${story.slice(0, 4000)}` : "Post: (none)",
     ].filter(Boolean).join("\n");
 
-    const out = await geminiJson<{ tags?: string[]; title?: string; story?: string; titleTranslated?: string }>(
+    const out = await geminiJson<{ tags?: string[]; title?: string; story?: string; titleTranslated?: string; accessInfo?: string; permitInfo?: string }>(
       [{ inline_data: { mime_type: "image/jpeg", data: input.imageB64 } }, { text: prompt }],
       {
         type: "OBJECT",
@@ -257,8 +306,10 @@ export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutM
           title: { type: "STRING" },
           story: { type: "STRING" },
           titleTranslated: { type: "STRING" },
+          accessInfo: { type: "STRING" },
+          permitInfo: { type: "STRING" },
         },
-        required: ["tags", "title", "story", "titleTranslated"],
+        required: ["tags", "title", "story", "titleTranslated", "accessInfo", "permitInfo"],
       },
       timeoutMs,
     );
@@ -281,6 +332,8 @@ export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutM
       translated: Boolean(translatedStory || translatedTitle),
       titleGenerated: generated != null,
       tagged: suggested.length > 0,
+      accessInfo: wantNotes ? cleanNote(out.accessInfo) : null,
+      permitInfo: wantNotes ? cleanNote(out.permitInfo) : null,
     };
   } catch (err) {
     console.error("[ai/enrich] fallback to originals + time-based tags:", err);

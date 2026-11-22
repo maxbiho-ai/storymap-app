@@ -10,6 +10,9 @@ import ClusterPin from "./ClusterPin";
 import PhotoPopup from "./PhotoPopup";
 import PickModeBanner from "./PickModeBanner";
 import GpsEditBanner from "./GpsEditBanner";
+import SunCompass from "./SunCompass";
+import MapStyleSwitcher from "./MapStyleSwitcher";
+import { destination } from "@/lib/sunMoon";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { MAP_ID } from "./constants";
 
@@ -29,7 +32,13 @@ function readBounds(e: { target: mapboxgl.Map }): Bounds {
   return roundBounds({ north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() });
 }
 
-export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dark-v11", route }: Props) {
+const STYLES = {
+  dark: "mapbox://styles/mapbox/dark-v11",
+  satellite: "mapbox://styles/mapbox/satellite-streets-v12",
+  terrain: "mapbox://styles/mapbox/satellite-streets-v12",
+} as const;
+
+export default function MapView({ photos, mapStyle, route }: Props) {
   const { [MAP_ID]: map } = useMap();
   const bounds = useMapStore((s) => s.bounds);
   const setViewport = useMapStore((s) => s.setViewport);
@@ -45,6 +54,11 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
   const setGpsEditPoint = useMapStore((s) => s.setGpsEditPoint);
   const cancelGpsEdit = useMapStore((s) => s.cancelGpsEdit);
   const isDesktop = useIsDesktop();
+  const mapMode = useMapStore((s) => s.mapMode);
+  const zoom = useMapStore((s) => s.zoom);
+  const walk = useMapStore((s) => s.walk);
+  const walkStops = useMapStore((s) => s.walkStops);
+  const terrain = mapMode === "terrain";
 
   // זום שלם — לחישוב מחדש של ה-clusters *תוך כדי* זום, לא רק בסופו
   const [zoomLevel, setZoomLevel] = useState(2);
@@ -61,6 +75,13 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
   const editing = gpsEdit ? editingLive ?? (editingSnap.current?.id === gpsEdit.photoId ? editingSnap.current : undefined) : undefined;
   const editingStackSize = useMemo(() => (editing ? stackOf(photos, editing).length : 0), [photos, editing]);
   const busy = pickMode || Boolean(gpsEdit);
+  // Walk radius ring around the origin pin
+  const ringData = useMemo(() => {
+    if (!walk) return null;
+    const { latitude: lat, longitude: lng } = walk.origin;
+    const pts = Array.from({ length: 97 }, (_, i) => destination(lat, lng, i * 3.75, walk.radiusKm * 1000));
+    return { type: "Feature" as const, properties: {}, geometry: { type: "LineString" as const, coordinates: pts } };
+  }, [walk]);
   const routeData = useMemo(
     () =>
       route && route.length > 1
@@ -110,6 +131,37 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editPhotoId, map]);
 
+  // 3D terrain: the DEM source + terrain are set on the raw map (and again whenever a style swap wipes them)
+  useEffect(() => {
+    const m = map?.getMap();
+    if (!m) return;
+    const apply = () => {
+      try {
+        if (terrain) {
+          if (!m.getSource("mapbox-dem")) m.addSource("mapbox-dem", { type: "raster-dem", url: "mapbox://mapbox.mapbox-dem", tileSize: 512, maxzoom: 14 });
+          m.setTerrain({ source: "mapbox-dem", exaggeration: 1.4 });
+        } else if (m.getTerrain()) m.setTerrain(null);
+      } catch (e) {
+        console.warn("Terrain setup failed", e);
+      }
+    };
+    if (m.isStyleLoaded()) apply();
+    m.on("style.load", apply);
+    return () => {
+      m.off("style.load", apply);
+    };
+  }, [terrain, map]);
+
+  // 3D terrain tilts the camera; leaving it flattens again
+  const prevMode = useRef(mapMode);
+  useEffect(() => {
+    if (!map || prevMode.current === mapMode) return;
+    const was3d = prevMode.current === "terrain";
+    prevMode.current = mapMode;
+    if (mapMode === "terrain") map.easeTo({ pitch: 62, duration: 1200 });
+    else if (was3d) map.easeTo({ pitch: 0, bearing: 0, duration: 900 });
+  }, [mapMode, map]);
+
   if (!TOKEN) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-neutral-900 p-6 text-center text-sm text-neutral-300">
@@ -122,7 +174,8 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
     <Map
       id={MAP_ID}
       mapboxAccessToken={TOKEN}
-      mapStyle={mapStyle}
+      mapStyle={mapStyle ?? STYLES[mapMode]}
+      maxPitch={80}
       initialViewState={{ longitude: 34.85, latitude: 31.5, zoom: 2 }}
       style={{ width: "100%", height: "100%" }}
       projection={{ name: "globe" }}
@@ -134,7 +187,36 @@ export default function MapView({ photos, mapStyle = "mapbox://styles/mapbox/dar
       attributionControl
       reuseMaps
     >
-      <NavigationControl position="bottom-right" showCompass={false} />
+      <NavigationControl position="bottom-right" showCompass={terrain} visualizePitch={terrain} />
+      <MapStyleSwitcher />
+
+      {terrain && (
+        <>
+          <Layer id="sky" type="sky" paint={{ "sky-type": "atmosphere", "sky-atmosphere-sun": [0, 0], "sky-atmosphere-sun-intensity": 12 }} />
+        </>
+      )}
+
+      {/* Nearby Photo Walk: radius ring + numbered stops */}
+      {ringData && (
+        <Source id="walk-ring" type="geojson" data={ringData}>
+          <Layer id="walk-ring-line" type="line" paint={{ "line-color": "#38bdf8", "line-width": 1.5, "line-opacity": 0.7, "line-dasharray": [2, 2] }} />
+        </Source>
+      )}
+      {walk && !busy && (
+        <>
+          <Marker longitude={walk.origin.longitude} latitude={walk.origin.latitude} anchor="center" style={{ zIndex: 26, pointerEvents: "none" }}>
+            <span className="block h-4 w-4 rounded-full border-2 border-white bg-sky-400 shadow-[0_0_0_6px_rgba(56,189,248,0.3)]" />
+          </Marker>
+          {walkStops.map((p, i) => (
+            <Marker key={`walk-${p.id}`} longitude={p.longitude} latitude={p.latitude} anchor="center" offset={[22, -62]} style={{ zIndex: 27, pointerEvents: "none" }}>
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-sky-400 text-xs font-bold text-neutral-950 shadow-lg ring-2 ring-white">{i + 1}</span>
+            </Marker>
+          ))}
+        </>
+      )}
+
+      {/* Light direction around the open pin */}
+      {selected && !busy && <SunCompass photo={selected} zoom={zoom} />}
       <GeolocateControl position="bottom-right" />
 
       {/* Trip list: a subtle dashed line through the saved pins, in list order */}

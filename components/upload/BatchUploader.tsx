@@ -142,6 +142,9 @@ export default function BatchUploader({ userId, defaultPhotographer, pickedLocat
                   Used for search. Pins always sit on each photo&apos;s GPS position.
                 </p>
               </div>
+              <textarea className={`${input} resize-none`} rows={1} maxLength={600} value={state.shared.accessInfo} onChange={(e) => batch.setShared({ accessInfo: e.target.value })} placeholder="🅿️ Parking & access (optional)" disabled={busy} aria-label="Parking and access" />
+              <textarea className={`${input} resize-none`} rows={1} maxLength={600} value={state.shared.permitInfo} onChange={(e) => batch.setShared({ permitInfo: e.target.value })} placeholder="🎫 Permit / drone / ticket (optional)" disabled={busy} aria-label="Permit, drone and ticket" />
+              <p className="text-[11px] text-neutral-500">Leave the notes empty and the AI fills them in from the description when it mentions parking, walking distance, tickets, permits or drone rules.</p>
               <input className={input} value={state.shared.photographer} onChange={(e) => batch.setShared({ photographer: e.target.value })} placeholder="Photographer name" disabled={busy} aria-label="Photographer name" />
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={state.shared.isPrivate} onChange={(e) => batch.setShared({ isPrivate: e.target.checked })} disabled={busy} />

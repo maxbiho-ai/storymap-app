@@ -37,9 +37,14 @@ export interface Photo {
   /** 'app' | 'maxbi-planner' */
   source: string;
   external_id: string | null;
+
+  /** Field notes: parking, walking distance, trail access (migration 007) */
+  access_info: string | null;
+  /** Field notes: permit, drone rules, tickets */
+  permit_info: string | null;
 }
 
-type DbDefaulted = "story" | "image_urls" | "storage_provider" | "storage_keys" | "source" | "external_id";
+type DbDefaulted = "story" | "image_urls" | "storage_provider" | "storage_keys" | "source" | "external_id" | "access_info" | "permit_info";
 export type PhotoInsert = Omit<Photo, "id" | "created_at" | DbDefaulted> & Partial<Pick<Photo, DbDefaulted>>;
 
 /** Everything read from EXIF. All optional: many files miss some fields */

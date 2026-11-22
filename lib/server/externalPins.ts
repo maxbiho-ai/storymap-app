@@ -48,6 +48,9 @@ export interface PublishInput {
     focalLength: number | null;
   };
   story: string | null;
+  /** Optional field notes; when given they win over the AI-extracted ones */
+  accessInfo: string | null;
+  permitInfo: string | null;
   /** אופציונליים: */
   title: string | null;
   photographerName: string | null;
@@ -124,6 +127,8 @@ export function parsePublishBody(raw: unknown): PublishInput {
       focalLength: num(e.focalLength ?? e.focal_length),
     },
     story: str(b.story, 10_000),
+    accessInfo: str(b.accessInfo, 600),
+    permitInfo: str(b.permitInfo, 600),
     title: str(b.title, 200),
     photographerName: str(b.photographerName, 120),
     tags, // merged with AI + story hashtags and sanitized in createExternalPin
@@ -347,6 +352,8 @@ export async function createExternalPin(input: PublishInput): Promise<CreatedPin
       title,
       description: null,
       story,
+      access_info: input.accessInfo ?? enriched.accessInfo,
+      permit_info: input.permitInfo ?? enriched.permitInfo,
       storage_provider: "r2",
       storage_path: `${prefix}0.jpg`,
       storage_keys: keys,

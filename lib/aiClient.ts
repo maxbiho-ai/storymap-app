@@ -65,3 +65,22 @@ export async function translateToEnglish(texts: string[]): Promise<string[]> {
     return texts;
   }
 }
+
+export interface FieldNotes {
+  accessInfo: string | null;
+  permitInfo: string | null;
+}
+
+/** Parking / access and permit / drone / ticket notes found in the descriptions (same order). Never throws */
+export async function extractFieldNotes(texts: string[]): Promise<FieldNotes[]> {
+  const none = texts.map(() => ({ accessInfo: null, permitInfo: null }));
+  if (!texts.some((t) => t.trim())) return none;
+  try {
+    const res = await fetch("/api/ai/field-notes", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ texts }) });
+    if (!res.ok) return none;
+    const data = (await res.json()) as { notes?: FieldNotes[] };
+    return Array.isArray(data.notes) && data.notes.length === texts.length ? data.notes : none;
+  } catch {
+    return none;
+  }
+}

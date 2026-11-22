@@ -13,6 +13,9 @@ import Lightbox, { type Slide } from "./Lightbox";
 import SocialActions from "@/components/social/SocialActions";
 import CommentsSection from "@/components/social/CommentsSection";
 import DeleteDialog from "@/components/social/DeleteDialog";
+import FieldNotes from "./FieldNotes";
+import LightPlanner from "./LightPlanner";
+import { streetViewUrl } from "@/lib/walk";
 
 function exposureLine(p: Photo): string {
   return [
@@ -55,6 +58,11 @@ const Icon = {
       <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
     </svg>
   ),
+  street: (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="5" r="2.5" /><path d="M12 9v6M8 21l4-6 4 6M7 12h10" />
+    </svg>
+  ),
   gps: (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M12 21s-7-6.2-7-11.5A7 7 0 0119 9.5C19 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" />
@@ -92,6 +100,10 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   const select = useMapStore((s) => s.select);
   const currentUserId = useMapStore((s) => s.currentUserId);
   const startGpsEdit = useMapStore((s) => s.startGpsEdit);
+  const walk = useMapStore((s) => s.walk);
+  const startWalk = useMapStore((s) => s.startWalk);
+  const endWalk = useMapStore((s) => s.endWalk);
+  const walking = walk?.origin.id === photo.id;
   const commentsFor = useMapStore((s) => s.commentsFor);
   const openComments = useMapStore((s) => s.openComments);
   const isOwner = Boolean(currentUserId && currentUserId === photo.user_id);
@@ -325,6 +337,9 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
           <IconButton label={copied === "gps" ? "Copied" : "Copy coordinates"} onClick={() => copy("gps", coords)} active={copied === "gps"}>
             {copied === "gps" ? Icon.check : Icon.copy}
           </IconButton>
+          <IconButton label="Open in Street View" onClick={() => window.open(streetViewUrl(photo.latitude, photo.longitude), "_blank", "noopener,noreferrer")}>
+            {Icon.street}
+          </IconButton>
           {isOwner && (
             <IconButton label="Edit GPS on the map" onClick={() => startGpsEdit(photo.id, { latitude: photo.latitude, longitude: photo.longitude })}>
               {Icon.pencil}
@@ -341,6 +356,12 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
           </p>
         )}
 
+        {photo.taken_at && (
+          <div className="!mt-2">
+            <LightPlanner photo={photo} />
+          </div>
+        )}
+
         {(camera || exposure || photo.lens) && (
           <div className="!mt-2.5 space-y-0.5 rounded-xl bg-white/5 px-3 py-2 font-mono text-[11px] text-neutral-300">
             {camera && <div className="truncate">{camera}</div>}
@@ -348,6 +369,19 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
             {exposure && <div className="text-amber-200/90">{exposure}</div>}
           </div>
         )}
+
+        <div className="!mt-2.5">
+          <FieldNotes photo={photo} isOwner={isOwner} />
+        </div>
+
+        <button
+          type="button"
+          onClick={() => (walking ? endWalk() : startWalk(photo))}
+          aria-pressed={walking}
+          className={`!mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition ${walking ? "bg-sky-400 text-neutral-950 hover:bg-sky-300" : "bg-white/10 text-neutral-100 hover:bg-white/15"}`}
+        >
+          🥾 {walking ? "End Nearby Photo Walk" : "Nearby Photo Walk · what else within 30 min?"}
+        </button>
 
         {photo.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 pt-1">

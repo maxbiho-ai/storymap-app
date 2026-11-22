@@ -6,7 +6,7 @@ import { compressImage, type CompressedImage } from "@/lib/compress";
 import { uploadPhoto } from "@/lib/upload";
 import { runQueue } from "@/lib/queue";
 import { resolveTakenAt } from "@/lib/time";
-import { suggestTags, translateToEnglish } from "@/lib/aiClient";
+import { extractFieldNotes, suggestTags, translateToEnglish, type FieldNotes } from "@/lib/aiClient";
 import { normalizeTag } from "@/lib/tags";
 import { reverseGeocode, type PlaceSuggestion } from "@/lib/geocode";
 import type { ExtractedExif, Photo } from "@/types/photo";
@@ -51,6 +51,9 @@ export interface SharedFields {
   locationName: string;
   photographer: string;
   isPrivate: boolean;
+  /** Field notes typed by hand: they win over what the AI finds in the description */
+  accessInfo: string;
+  permitInfo: string;
 }
 
 interface State {
@@ -82,6 +85,8 @@ const initialShared = (photographer: string): SharedFields => ({
   locationName: "",
   photographer,
   isPrivate: false,
+  accessInfo: "",
+  permitInfo: "",
 });
 
 function reducer(s: State, a: Action): State {
@@ -311,6 +316,7 @@ export function useUploadBatch(opts: {
         if (t) texts.set(t, t);
       }
     }
+    for (const t of [s.shared.accessInfo.trim(), s.shared.permitInfo.trim()]) if (t) texts.set(t, t);
     if (texts.size) {
       dispatch({ type: "translating", value: true });
       const originals = [...texts.keys()];
@@ -319,6 +325,18 @@ export function useUploadBatch(opts: {
       dispatch({ type: "translating", value: false });
     }
     const en = (t: string) => (t ? texts.get(t) ?? t : null);
+
+    // Parking / permit / drone notes: AI reads the (English) descriptions; typed values win
+    const manualAccess = en(s.shared.accessInfo.trim());
+    const manualPermit = en(s.shared.permitInfo.trim());
+    const notes = new Map<string, FieldNotes>();
+    if (!(manualAccess && manualPermit)) {
+      const descs = [...new Set(todo.map((it) => en(pick(it.description, s.shared.description))).filter((d): d is string => Boolean(d)))];
+      if (descs.length) {
+        const found = await extractFieldNotes(descs);
+        descs.forEach((d, i) => notes.set(d, found[i]));
+      }
+    }
 
     const photographer = s.shared.photographer.trim() || null;
     const uploaded: Photo[] = [];
@@ -341,6 +359,8 @@ export function useUploadBatch(opts: {
           photographer_name: photographer,
           tags: latest.tags,
           is_private: s.shared.isPrivate,
+          access_info: manualAccess ?? notes.get(en(pick(it.description, s.shared.description)) ?? "")?.accessInfo ?? null,
+          permit_info: manualPermit ?? notes.get(en(pick(it.description, s.shared.description)) ?? "")?.permitInfo ?? null,
         });
         uploaded.push(photo);
         patch(it.id, { status: "done", photo });

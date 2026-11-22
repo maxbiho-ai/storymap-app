@@ -16,6 +16,9 @@ import { useMapStore, padBounds } from "@/store/mapStore";
 import { stackOf } from "@/hooks/useClusters";
 import { MAP_ID } from "@/components/map/constants";
 import ListsMenu from "@/components/social/ListsMenu";
+import GearFilters from "@/components/map/GearFilters";
+import NearbyWalkPanel from "@/components/map/NearbyWalkPanel";
+import { lensOptions, matchesGear, gearCount } from "@/lib/gear";
 import NotificationsBell, { type AppNotification } from "@/components/social/NotificationsBell";
 import { useSocialStore } from "@/store/socialStore";
 import { useCollectionPhotos, googleMapsRouteUrl, GOOGLE_MAPS_MAX_STOPS } from "@/hooks/useCollectionPhotos";
@@ -38,7 +41,7 @@ export default function Home() {
 function StoryMap() {
   const { [MAP_ID]: map } = useMap();
   const [uploadOpen, setUploadOpen] = useState(false);
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { user, loading: authLoading, signOut, recovery, endRecovery } = useAuth();
   const [authOpen, setAuthOpen] = useState(false);
   // Guest clicked "Upload": open the uploader right after login
   const [uploadAfterLogin, setUploadAfterLogin] = useState(false);
@@ -72,15 +75,27 @@ function StoryMap() {
   const listVersion = useSocialStore((s) => s.version);
   const { photos: listPhotos, loading: listLoading } = useCollectionPhotos(activeCollection?.id ?? null, listVersion);
 
+  // Lens / lighting / long-exposure filters apply to the loaded pins
+  const gear = useMapStore((s) => s.gear);
+  const walk = useMapStore((s) => s.walk);
+  const walkStops = useMapStore((s) => s.walkStops);
+  const lenses = useMemo(() => lensOptions(activeCollection ? listPhotos : loaded), [activeCollection, listPhotos, loaded]);
+
   const photos = useMemo(() => {
     let base = activeCollection ? filterLocally(listPhotos, filters) : loaded;
+    if (gearCount(gear)) base = base.filter((p) => matchesGear(p, gear));
+    // A Nearby Photo Walk always shows its origin and stops, wherever the viewport is
+    if (walk) {
+      const have = new Set(base.map((p) => p.id));
+      base = [...base, ...[walk.origin, ...walkStops].filter((p) => !have.has(p.id))];
+    }
     if (Object.keys(deleted).length) base = base.filter((p) => !deleted[p.id]);
     return Object.keys(edits).length ? base.map((p) => (edits[p.id] ? { ...p, ...edits[p.id] } : p)) : base;
-  }, [activeCollection, listPhotos, loaded, filters, edits, deleted]);
-  const route = useMemo<[number, number][] | undefined>(
-    () => (activeCollection ? photos.map((p) => [p.longitude, p.latitude]) : undefined),
-    [activeCollection, photos],
-  );
+  }, [activeCollection, listPhotos, loaded, filters, gear, walk, walkStops, edits, deleted]);
+  const route = useMemo<[number, number][] | undefined>(() => {
+    if (walk) return [walk.origin, ...walkStops].map((p) => [p.longitude, p.latitude] as [number, number]);
+    return activeCollection ? photos.map((p) => [p.longitude, p.latitude] as [number, number]) : undefined;
+  }, [activeCollection, photos, walk, walkStops]);
   const routeUrl = activeCollection ? googleMapsRouteUrl(photos) : null;
   const gpsEdit = useMapStore((s) => s.gpsEdit);
   const setCurrentUser = useMapStore((s) => s.setCurrentUser);
@@ -277,6 +292,9 @@ function StoryMap() {
         </div>
         <div className="pointer-events-auto min-w-0 flex-1">
           <PhotoSearchBar value={filters} onChange={setFilters} resultCount={photos.length} loading={activeCollection ? listLoading : loading} />
+          <div className="mt-0.5">
+            <GearFilters lenses={lenses} />
+          </div>
           {activeCollection && (
             <div className="mt-1 flex max-w-xl flex-wrap items-center gap-2 rounded-2xl bg-neutral-950/85 px-3 py-2 text-xs text-neutral-200 shadow-lg backdrop-blur">
               <span className="font-semibold text-amber-300" dir="auto">🧭 {activeCollection.name}</span>
@@ -328,6 +346,7 @@ function StoryMap() {
       </header>
 
       <FloatingGallery photos={photos} loading={loading} />
+      {walk && !pickMode && !gpsEdit && <NearbyWalkPanel />}
 
       {selectedPhoto && !pickMode && !gpsEdit && <PhotoDrawer photo={selectedPhoto} stack={selectedStack} onClose={() => select(null)} />}
 
@@ -355,7 +374,7 @@ function StoryMap() {
           />
         </div>
       )}
-      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+      <AuthModal open={authOpen || recovery} recovery={recovery} onClose={() => { setAuthOpen(false); endRecovery(); }} />
     </main>
   );
 }
