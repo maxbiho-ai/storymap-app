@@ -15,6 +15,8 @@
  *   --ai                  Gemini title + tags (no story), ~4s pacing, retry with backoff on 429
  *   --max-mb=<n>          size target for the stored main file (default 1.5, 0 = off: 3840px q92 4:4:4)
  *   --allow-faces         import photos with recognizable human faces too (skipped by default)
+ *   --prune-faces         audit pins already imported from --dir for recognizable faces; with --dry-run only lists them,
+ *                         otherwise deletes the flagged pins (row + image + thumbnail)
  *   --timelapse-hero      import the middle frame of each timelapse / sequence folder (#timelapse); folders are skipped otherwise
  *   --include-flights     import Flight / Ben Gurion folders at the arrival airport + #flight #aerial
  *   --country=<name>      country when it can't be read from the folder names (e.g. "Norway")
@@ -57,6 +59,7 @@ interface Args {
   includeFlights: boolean;
   allowFaces: boolean;
   timelapseHero: boolean;
+  pruneFaces: boolean;
   country: string | null;
   email: string;
   ownerId: string | null;
@@ -89,12 +92,13 @@ function parseArgs(argv: string[]): Args {
     includeFlights: flags.has("include-flights"),
     allowFaces: flags.has("allow-faces"),
     timelapseHero: flags.has("timelapse-hero"),
+    pruneFaces: flags.has("prune-faces"),
     country: str("country"),
     email: str("email") ?? "maxbiho@gmail.com",
     ownerId: str("owner-id"),
   };
 }
-const BOOL_FLAGS = new Set(["dry-run", "force", "ai", "include-flights", "allow-faces", "timelapse-hero"]);
+const BOOL_FLAGS = new Set(["dry-run", "force", "ai", "include-flights", "allow-faces", "timelapse-hero", "prune-faces"]);
 
 function fail(msg: string): never {
   console.error(`\n✖ ${msg}`);
@@ -513,6 +517,85 @@ interface Row {
 
 const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
+/** Audit (and delete) already-imported pins of a trip folder that show recognizable faces */
+async function pruneFaces(args: Args, tripName: string): Promise<void> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceKey) fail("--prune-faces needs NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.local");
+  if (!process.env.GEMINI_API_KEY) fail("--prune-faces needs GEMINI_API_KEY in .env.local");
+  const db = createClient(url!, serviceKey!, { auth: { persistSession: false, autoRefreshToken: false } });
+  const owner = await findOwner(db, args);
+
+  // source_key = "<trip-folder>/..." (lowercase, NFC); escape LIKE wildcards in the folder name
+  const prefix = `${tripName.normalize("NFC").toLowerCase()}/`;
+  const pattern = prefix.replace(/[\\%_]/g, (c) => `\\${c}`) + "%";
+  type Pin = { id: string; source_key: string; title: string | null; location_name: string | null; storage_path: string; thumb_url: string | null; photo_url: string };
+  const pins: Pin[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db
+      .from("photos")
+      .select("id, source_key, title, location_name, storage_path, thumb_url, photo_url")
+      .eq("user_id", owner)
+      .like("source_key", pattern)
+      .order("source_key")
+      .range(from, from + 999);
+    if (error) {
+      if (/source_key/.test(error.message)) fail("The photos.source_key column is missing: run supabase/migrations/008_archive_source_key.sql first.");
+      fail(`Could not read photos: ${error.message}`);
+    }
+    pins.push(...((data ?? []) as Pin[]));
+    if ((data?.length ?? 0) < 1000) break;
+  }
+  console.log(`StoryMap face audit ${args.dryRun ? "(DRY RUN, nothing is deleted)" : "(DELETES flagged pins)"}`);
+  console.log(`  ${pins.length} imported pins with source_key "${prefix}…" for this account\n`);
+
+  const flagged: Pin[] = [];
+  const unchecked: Pin[] = [];
+  let n = 0;
+  for (const p of pins) {
+    n++;
+    const img = p.thumb_url ?? p.photo_url;
+    let faces: boolean | null = null;
+    try {
+      const res = await fetch(img, { signal: AbortSignal.timeout(20_000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      faces = await faceCheck(Buffer.from(await res.arrayBuffer()));
+    } catch (err) {
+      console.warn(`    could not load ${img}: ${(err as Error).message}`);
+    }
+    if (faces === true) flagged.push(p);
+    else if (faces === null) unchecked.push(p);
+    console.log(`[${n}/${pins.length}] ${p.source_key}: ${faces === true ? "FACES" : faces === null ? "unchecked" : "ok"}`);
+  }
+
+  console.log(`\nFlagged as having recognizable human faces: ${flagged.length}`);
+  flagged.forEach((p, i) => console.log(`  ${i + 1}. id=${p.id}\n     source_key=${p.source_key}\n     title=${p.title ?? "-"}  location=${p.location_name ?? "-"}`));
+  if (unchecked.length) {
+    console.log(`\nCould not be checked (not touched, re-run to retry): ${unchecked.length}`);
+    unchecked.forEach((p) => console.log(`  - ${p.source_key}`));
+  }
+  if (args.dryRun || !flagged.length) {
+    console.log(args.dryRun ? "\nDry run: nothing was deleted." : "\nNothing to remove.");
+    return;
+  }
+
+  let removed = 0;
+  const bucket = db.storage.from(BUCKET);
+  for (const p of flagged) {
+    // row first (likes/comments cascade), then the files
+    const { error } = await db.from("photos").delete().eq("id", p.id).eq("user_id", owner);
+    if (error) {
+      console.error(`  ✖ ${p.source_key}: ${error.message}`);
+      continue;
+    }
+    const { error: fe } = await bucket.remove([p.storage_path, p.storage_path.replace(/\.jpg$/i, "_thumb.jpg")]);
+    if (fe) console.warn(`  ! ${p.source_key}: row deleted, files could not be removed (${fe.message})`);
+    removed++;
+  }
+  console.log(`\nRemoved ${removed} of ${flagged.length} pins (rows + image + thumbnail files).`);
+  if (removed < flagged.length) process.exitCode = 1;
+}
+
 async function main() {
   loadEnv();
   const args = parseArgs(process.argv.slice(2));
@@ -520,6 +603,7 @@ async function main() {
   const st = await fs.stat(root).catch(() => null);
   if (!st?.isDirectory()) fail(`Not a folder: ${root}`);
   const tripName = path.basename(root);
+  if (args.pruneFaces) return pruneFaces(args, tripName);
 
   console.log(`StoryMap archive import ${args.dryRun ? "(DRY RUN, nothing is uploaded)" : ""}`);
   console.log(`  folder : ${root}  (read-only: no file on disk is modified, moved or deleted)`);
