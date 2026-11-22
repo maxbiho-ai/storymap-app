@@ -412,9 +412,17 @@ async function paceAi(): Promise<void> {
   lastAiAt = Date.now();
 }
 const isRateLimit = (msg: string) => /429|RESOURCE_EXHAUSTED|rate/i.test(msg);
+/** Timeouts / aborted or dropped connections: retried once */
+const isTransient = (err: unknown) => {
+  const e = err as { name?: string; message?: string; cause?: { code?: string } };
+  return /TimeoutError|AbortError/.test(e?.name ?? "") || /aborted|timeout|timed out|fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket/i.test(`${e?.message ?? ""} ${e?.cause?.code ?? ""}`);
+};
+/** CLI Gemini calls may take longer than the web routes' 8s */
+const CLI_AI_TIMEOUT_MS = 30_000;
 
 /** Lightweight vision check (no --ai): true / false, or null if Gemini could not answer */
 async function faceCheck(thumb: Buffer): Promise<boolean | null> {
+  let retriedTransient = false;
   for (let attempt = 0; attempt < 6; attempt++) {
     await paceAi();
     try {
@@ -424,7 +432,8 @@ async function faceCheck(thumb: Buffer): Promise<boolean | null> {
           { text: "hasRecognizableFaces: true if the photo is a portrait, group shot, selfie or shows recognizable human faces; false for pure landscapes, wildlife, architecture, or tiny distant figures in a vast landscape." },
         ],
         { type: "OBJECT", properties: { hasRecognizableFaces: { type: "BOOLEAN" } }, required: ["hasRecognizableFaces"] },
-        8000,
+        CLI_AI_TIMEOUT_MS,
+        CLI_AI_TIMEOUT_MS,
       );
       return typeof r.hasRecognizableFaces === "boolean" ? r.hasRecognizableFaces : null;
     } catch (err) {
@@ -433,6 +442,12 @@ async function faceCheck(thumb: Buffer): Promise<boolean | null> {
         const backoff = Math.min(60_000, AI_PACE_MS * 2 ** (attempt + 1));
         console.log(`    Gemini rate limit, retrying in ${Math.round(backoff / 1000)}s…`);
         await sleep(backoff);
+        continue;
+      }
+      if (!retriedTransient && isTransient(err)) {
+        retriedTransient = true;
+        console.log(`    Gemini timeout/network error (${msg.slice(0, 60)}), retrying once…`);
+        await sleep(AI_PACE_MS);
         continue;
       }
       console.warn(`    Face check failed (${msg.slice(0, 120)})`);
@@ -445,10 +460,11 @@ async function faceCheck(thumb: Buffer): Promise<boolean | null> {
 async function aiTitleTags(thumb: Buffer, takenAt: string | null, lat: number, lng: number, locationName: string | null, extra: string[], detectFaces: boolean) {
   const wait = lastAiAt + AI_PACE_MS - Date.now();
   if (wait > 0) await sleep(wait);
+  let retriedTransient = false;
   for (let attempt = 0; attempt < 6; attempt++) {
     lastAiAt = Date.now();
     try {
-      const r = await aiEnrich({ imageB64: thumb.toString("base64"), takenAt, lat, lng, locationName, title: null, story: null, detectFaces }, extra, 8000, { rethrow: true });
+      const r = await aiEnrich({ imageB64: thumb.toString("base64"), takenAt, lat, lng, locationName, title: null, story: null, detectFaces }, extra, CLI_AI_TIMEOUT_MS, { rethrow: true, capMs: CLI_AI_TIMEOUT_MS });
       return { title: r.titleGenerated ? r.title : null, tags: r.tags, ai: r.tagged, hasFaces: r.hasFaces };
     } catch (err) {
       const msg = String((err as Error).message ?? err);
@@ -456,6 +472,12 @@ async function aiTitleTags(thumb: Buffer, takenAt: string | null, lat: number, l
         const backoff = Math.min(60_000, AI_PACE_MS * 2 ** (attempt + 1));
         console.log(`    Gemini rate limit, retrying in ${Math.round(backoff / 1000)}s…`);
         await sleep(backoff);
+        continue;
+      }
+      if (!retriedTransient && isTransient(err)) {
+        retriedTransient = true;
+        console.log(`    Gemini timeout/network error (${msg.slice(0, 60)}), retrying once…`);
+        await sleep(AI_PACE_MS);
         continue;
       }
       console.warn(`    Gemini failed (${msg.slice(0, 120)}): using time-based tags`);
@@ -556,12 +578,15 @@ async function pruneFaces(args: Args, tripName: string): Promise<void> {
     n++;
     const img = p.thumb_url ?? p.photo_url;
     let faces: boolean | null = null;
-    try {
-      const res = await fetch(img, { signal: AbortSignal.timeout(20_000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      faces = await faceCheck(Buffer.from(await res.arrayBuffer()));
-    } catch (err) {
-      console.warn(`    could not load ${img}: ${(err as Error).message}`);
+    for (let tryNo = 0; tryNo < 2 && faces === null; tryNo++) {
+      try {
+        const res = await fetch(img, { signal: AbortSignal.timeout(30_000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        faces = await faceCheck(Buffer.from(await res.arrayBuffer()));
+        break;
+      } catch (err) {
+        console.warn(`    could not load ${img}: ${(err as Error).message}${tryNo === 0 ? " (retrying once)" : ""}`);
+      }
     }
     if (faces === true) flagged.push(p);
     else if (faces === null) unchecked.push(p);

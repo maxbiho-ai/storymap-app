@@ -21,7 +21,8 @@ function thinkingLevelFor(model: string): string {
   return /3\.5/.test(model) ? "MINIMAL" : "LOW";
 }
 
-export async function geminiJson<T>(parts: Part[], schema: object, timeoutMs = GEMINI_MAX_TIMEOUT_MS): Promise<T> {
+/** capMs: raise the hard cap for batch CLIs (the web routes keep the 8s default) */
+export async function geminiJson<T>(parts: Part[], schema: object, timeoutMs = GEMINI_MAX_TIMEOUT_MS, capMs = GEMINI_MAX_TIMEOUT_MS): Promise<T> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set");
   const model = process.env.GEMINI_MODEL || "gemini-3.5-flash";
@@ -31,7 +32,7 @@ export async function geminiJson<T>(parts: Part[], schema: object, timeoutMs = G
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      signal: AbortSignal.timeout(Math.min(timeoutMs, GEMINI_MAX_TIMEOUT_MS)),
+      signal: AbortSignal.timeout(Math.min(timeoutMs, capMs)),
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
         generationConfig: {

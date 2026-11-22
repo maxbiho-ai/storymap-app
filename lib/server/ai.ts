@@ -265,7 +265,7 @@ export interface EnrichResult extends FieldNotesResult {
  * One structured-JSON call instead of three parallel ones. Never throws: on a missing key,
  * timeout, bad JSON or any model error it returns the originals + time-based tags.
  */
-export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutMs?: number, opts?: { rethrow?: boolean }): Promise<EnrichResult> {
+export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutMs?: number, opts?: { rethrow?: boolean; capMs?: number }): Promise<EnrichResult> {
   const { lat, lng, takenAt } = input;
   const located = lat != null && lng != null;
   const fallback = (): EnrichResult => {
@@ -320,6 +320,7 @@ export async function aiEnrich(input: EnrichInput, extraTags: string[], timeoutM
         required: ["tags", "title", "story", "titleTranslated", "accessInfo", "permitInfo", ...(input.detectFaces ? ["hasRecognizableFaces"] : [])],
       },
       timeoutMs,
+      opts?.capMs,
     );
 
     const suggested = Array.isArray(out.tags) ? out.tags.filter((t): t is string => typeof t === "string") : [];
