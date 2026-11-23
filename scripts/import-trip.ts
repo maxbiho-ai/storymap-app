@@ -45,6 +45,7 @@ import {
   type Candidate,
   type Country,
   type ScanFile,
+  countryFromTripName,
 } from "./lib/archive";
 
 // ---------------------------------------------------------------------------
@@ -267,7 +268,8 @@ async function geocode(q: string, iso: string | null): Promise<Geo | null> {
 // Location: 3 tiers
 // ---------------------------------------------------------------------------
 
-type Tier = "exif" | "phone" | "folder";
+/** exif = own GPS; phone / folder_exif_match = GPS of the closest photo in the same folder; folder = Mapbox on folder names */
+type Tier = "exif" | "phone" | "folder_exif_match" | "folder";
 interface Located {
   lat: number;
   lng: number;
@@ -279,25 +281,32 @@ interface Located {
   note: string;
 }
 
-const phoneExifByDir = new Map<string, { file: ScanFile; exif: Exif }[]>();
+const folderExifByDir = new Map<string, { file: ScanFile; exif: Exif; phone: boolean }[]>();
 const folderGeo = new Map<string, { geo: Geo | null; q: string }>();
+const PHONE_NAME = /^\d{8}[_-]\d{6}/;
+const GPS_SOURCE_EXT = new Set([".jpg", ".jpeg", ".nef", ".nrw", ".dng", ".cr2", ".cr3", ".arw", ".raf", ".orf", ".rw2", ".heic", ".tif", ".tiff"]);
 
-async function phonesWithGps(dir: string, phones: Map<string, ScanFile[]>) {
-  let cached = phoneExifByDir.get(dir);
+/** Every GPS-enabled photo of one folder, whatever the camera (Nikon Z7 II DSC_*, phones, raws) */
+async function gpsPhotosInDir(dir: string, byDir: Map<string, ScanFile[]>) {
+  let cached = folderExifByDir.get(dir);
   if (!cached) {
     cached = [];
-    for (const f of phones.get(dir) ?? []) {
+    for (const f of byDir.get(dir) ?? []) {
       const e = await readExif(f);
-      if (e.lat != null && e.wall) cached.push({ file: f, exif: e });
+      if (e.lat != null && e.lng != null) cached.push({ file: f, exif: e, phone: PHONE_NAME.test(f.stem) });
     }
-    phoneExifByDir.set(dir, cached);
+    folderExifByDir.set(dir, cached);
   }
   return cached;
 }
 
-const THREE_HOURS = 3 * 3600_000;
+const median = (xs: number[]) => {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
 
-async function locate(c: Candidate, exif: Exif, phones: Map<string, ScanFile[]>, rootAbs: string, country: Country | null): Promise<Located | null> {
+async function locate(c: Candidate, exif: Exif, filesByDir: Map<string, ScanFile[]>, rootAbs: string, country: Country | null): Promise<Located | null> {
   const place = placeFromFolders(c.file.relDir);
   const label = place.label && place.kind !== "flight" ? place.label : null;
   const nameFor = (spot: string | null) => [spot, country?.name].filter(Boolean).join(", ") || null;
@@ -307,16 +316,18 @@ async function locate(c: Candidate, exif: Exif, phones: Map<string, ScanFile[]>,
     return { lat: exif.lat, lng: exif.lng, tier: "exif", name: nameFor(label), label, note: "EXIF GPS" };
   }
 
-  // Tier 2: a phone photo in the same folder, taken within 3 hours
-  if (exif.wall) {
-    const t = wallMs(exif.wall);
-    const near = (await phonesWithGps(c.file.relDir, phones))
-      .map((p) => ({ p, dt: Math.abs(wallMs(p.exif.wall!) - t) }))
-      .filter((x) => x.dt <= THREE_HOURS)
-      .sort((a, b) => a.dt - b.dt)[0];
-    if (near) {
-      return { lat: near.p.exif.lat!, lng: near.p.exif.lng!, tier: "phone", name: nameFor(label), label, note: `phone ${near.p.file.name} (${Math.round(near.dt / 60000)} min)` };
+  // Tier 2 (priority 1 fallback): GPS from the same folder. A Nikon Z6 II file (THL_*) has none, but the Z7 II
+  // files (DSC_*) next to it do: take the one whose capture time is closest. No timestamp (or none to compare)
+  // → the folder's median GPS.
+  const pool = await gpsPhotosInDir(c.file.relDir, filesByDir);
+  if (pool.length) {
+    const t = exif.wall ? wallMs(exif.wall) : null;
+    const timed = t == null ? [] : pool.filter((p) => p.exif.wall).map((p) => ({ p, dt: Math.abs(wallMs(p.exif.wall!) - t) })).sort((a, b) => a.dt - b.dt);
+    if (timed.length) {
+      const { p, dt } = timed[0];
+      return { lat: p.exif.lat!, lng: p.exif.lng!, tier: p.phone ? "phone" : "folder_exif_match", name: nameFor(label), label, note: `${p.phone ? "phone" : "folder EXIF"} ${p.file.name} (${Math.round(dt / 60000)} min)` };
     }
+    return { lat: median(pool.map((p) => p.exif.lat!)), lng: median(pool.map((p) => p.exif.lng!)), tier: "folder_exif_match", name: nameFor(label), label, note: `folder median of ${pool.length} GPS photos (no timestamp)` };
   }
 
   // Tier 3: folder names → Mapbox, one lookup per subfolder
@@ -688,6 +699,14 @@ async function main() {
 
   const files = await walk(root);
   const scan = scanArchive(files, tripName, args.includeFlights);
+  // Every photo-like file per folder: the pool the GPS fallback draws from
+  const filesByDir = new Map<string, ScanFile[]>();
+  for (const f of files) {
+    if (!GPS_SOURCE_EXT.has(f.ext)) continue;
+    const l = filesByDir.get(f.relDir) ?? [];
+    l.push(f);
+    filesByDir.set(f.relDir, l);
+  }
   // Timelapse / panorama sequence folders: skipped, or just their middle frame
   const tl = await detectTimelapse(files, tripName);
   let list = scan.candidates.filter((c) => !tl.has(c.file.relDir));
@@ -713,7 +732,10 @@ async function main() {
   // country from the --dir path and each photo's folders
   const fullParts = root.split(path.sep).filter(Boolean);
   const forced = args.country ? COUNTRIES.find((c) => c.name.toLowerCase() === args.country!.toLowerCase()) ?? { name: args.country, iso: "", airport: `international airport`, he: [] } : null;
-  const countryOf = (c: Candidate): Country | null => forced ?? detectCountry([...fullParts, ...(c.file.relDir ? c.file.relDir.split("/") : [])]);
+  // Priority 2: the country in the root trip folder name ("Trip 49 - ... - South Korea") backs up the subfolders
+  const rootCountry = countryFromTripName(tripName);
+  const countryOf = (c: Candidate): Country | null =>
+    forced ?? detectCountry([...fullParts, ...(c.file.relDir ? c.file.relDir.split("/") : [])]) ?? rootCountry;
 
   // Supabase (needed for upsert; in a dry run only to tell new from update)
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -738,7 +760,7 @@ async function main() {
   const stats = { new: 0, update: 0, unchanged: 0, skipped: 0, failed: 0, bytes: 0, faces: 0, faceUnknown: 0 };
   const faceFiles: string[] = [];
   const faceUnknownFiles: string[] = [];
-  const tierCount: Record<string, number> = { exif: 0, phone: 0, folder: 0 };
+  const tierCount: Record<string, number> = { exif: 0, phone: 0, folder_exif_match: 0, folder: 0 };
   const photographer = process.env.EXTERNAL_DEFAULT_PHOTOGRAPHER || "Max Bihovskiy";
 
   let i = 0;
@@ -750,7 +772,7 @@ async function main() {
     try {
       const country = countryOf(cand);
       const exif = await mergedExif(cand);
-      const loc = await locate(cand, exif, scan.phones, root, country);
+      const loc = await locate(cand, exif, filesByDir, root, country);
       const ex = existing.get(cand.key);
 
       if (!loc) {
@@ -897,7 +919,7 @@ async function main() {
     console.log("\n#   action     tier    file → canonical key");
     rows.forEach((r, n) => {
       const f = `${r.cand.file.relDir ? `${r.cand.file.relDir}/` : ""}${r.cand.file.name}`;
-      console.log(`${String(n + 1).padEnd(3)} ${r.action.padEnd(10)} ${r.tier.padEnd(7)} ${short(f, 60)} → ${short(r.cand.key, 70)}`);
+      console.log(`${String(n + 1).padEnd(3)} ${r.action.padEnd(10)} ${r.tier.padEnd(17)} ${short(f, 60)} → ${short(r.cand.key, 70)}`);
       console.log(`${" ".repeat(23)}${r.action === "skip" ? `✖ ${r.note}` : `📍 ${short(r.place, 50)}  (${r.note})`}`);
     });
   }
@@ -922,7 +944,7 @@ async function main() {
   }
   console.log(
     `\nDone: ${stats.new} ${args.dryRun ? "to import" : "imported"}, ${stats.update} ${args.dryRun ? "to update" : "updated"}, ${stats.unchanged} unchanged, ${stats.skipped} without a location, ${stats.failed} failed.` +
-      `  GPS tiers: EXIF ${tierCount.exif}, phone ${tierCount.phone}, folder ${tierCount.folder}.` +
+      `  GPS tiers: EXIF ${tierCount.exif}, phone ${tierCount.phone}, folder-EXIF match ${tierCount.folder_exif_match}, folder name ${tierCount.folder}.` +
       (stats.bytes ? `  Uploaded ${(stats.bytes / 1048576).toFixed(1)} MB.` : ""),
   );
   if (stats.failed) process.exitCode = 1;

@@ -205,7 +205,31 @@ export const COUNTRIES: Country[] = [
   { name: "Romania", iso: "ro", airport: "Henri Coanda International Airport", he: ["רומניה"] },
   { name: "Ireland", iso: "ie", airport: "Dublin Airport", he: ["אירלנד"] },
   { name: "Faroe Islands", iso: "fo", airport: "Vagar Airport", he: ["איי פארו"] },
+  { name: "South Korea", iso: "kr", airport: "Incheon International Airport", he: ["דרום קוריאה"] },
+  { name: "Uganda", iso: "ug", airport: "Entebbe International Airport", he: ["אוגנדה"] },
+  { name: "Kenya", iso: "ke", airport: "Jomo Kenyatta International Airport", he: ["קניה", "קניה"] },
+  { name: "Tanzania", iso: "tz", airport: "Julius Nyerere International Airport", he: ["טנזניה"] },
+  { name: "Vietnam", iso: "vn", airport: "Noi Bai International Airport", he: ["וייטנאם"] },
+  { name: "Indonesia", iso: "id", airport: "Ngurah Rai International Airport", he: ["אינדונזיה"] },
+  { name: "Morocco", iso: "ma", airport: "Mohammed V International Airport", he: ["מרוקו"] },
+  { name: "Nepal", iso: "np", airport: "Tribhuvan International Airport", he: ["נפאל"] },
+  { name: "India", iso: "in", airport: "Indira Gandhi International Airport", he: ["הודו"] },
+  { name: "Mexico", iso: "mx", airport: "Mexico City International Airport", he: ["מקסיקו"] },
 ];
+
+/**
+ * Country named in the ROOT trip folder: "Trip 49 - 17.09 - 1.10.26 - South Korea" → South Korea.
+ * Known countries match by name anywhere in the folder name; otherwise the last " - " segment is used as an
+ * ad-hoc country (no ISO filter), so subfolder geocoding still gets a country without --country.
+ */
+export function countryFromTripName(tripName: string): Country | null {
+  const name = norm(tripName);
+  const known = detectCountry([name]);
+  if (known) return known;
+  const last = name.split(/\s+[-\u2013]\s+/).pop()?.trim() ?? "";
+  if (!/^[\p{L}][\p{L}\s.'\u2019]{1,40}$/u.test(last) || /^trip\b/i.test(last)) return null;
+  return { name: last, iso: "", airport: "international airport", he: [] };
+}
 
 /** Country from any folder name in the path (deepest first): Hebrew keyword or the English name */
 export function detectCountry(parts: string[]): Country | null {
