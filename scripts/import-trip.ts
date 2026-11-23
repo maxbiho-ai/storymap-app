@@ -36,7 +36,11 @@ import { geminiJson } from "@/lib/server/gemini";
 import { resolveTakenAt } from "@/lib/time";
 import {
   COUNTRIES,
-  detectCountry,
+  resolveCountry,
+  folderQueries,
+  placeLabel,
+  geocodeWithGuard,
+  type Geo,
   detectTimelapse,
   timelapseHero,
   placeFromFolders,
@@ -227,43 +231,6 @@ const wallMs = (w: string) => Date.parse(`${w}Z`);
 // Mapbox geocoding (cached)
 // ---------------------------------------------------------------------------
 
-interface Geo {
-  lat: number;
-  lng: number;
-  name: string;
-}
-const geoCache = new Map<string, Geo | null>();
-
-async function geocode(q: string, iso: string | null): Promise<Geo | null> {
-  const token = process.env.MAPBOX_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-  if (!token) fail("No Mapbox token: set NEXT_PUBLIC_MAPBOX_TOKEN in .env.local");
-  const key = `${q}|${iso ?? ""}`;
-  if (geoCache.has(key)) return geoCache.get(key)!;
-  const url =
-    `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(q)}&limit=1&language=en` +
-    `${iso ? `&country=${iso}` : ""}&access_token=${token}`;
-  let result: Geo | null = null;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-      if (res.status === 429) {
-        await sleep(1500 * 2 ** attempt);
-        continue;
-      }
-      if (!res.ok) break;
-      const data = (await res.json()) as { features?: { geometry?: { coordinates?: [number, number] }; properties?: { name?: string; full_address?: string } }[] };
-      const f = data.features?.[0];
-      const c = f?.geometry?.coordinates;
-      if (c && Number.isFinite(c[0]) && Number.isFinite(c[1])) result = { lat: c[1], lng: c[0], name: f?.properties?.full_address ?? f?.properties?.name ?? q };
-      break;
-    } catch {
-      await sleep(1000 * 2 ** attempt);
-    }
-  }
-  geoCache.set(key, result);
-  return result;
-}
-
 // ---------------------------------------------------------------------------
 // Location: 3 tiers
 // ---------------------------------------------------------------------------
@@ -282,7 +249,14 @@ interface Located {
 }
 
 const folderExifByDir = new Map<string, { file: ScanFile; exif: Exif; phone: boolean }[]>();
-const folderGeo = new Map<string, { geo: Geo | null; q: string }>();
+const folderGeo = new Map<string, { geo: Geo | null; q: string; fallback: boolean }>();
+interface Resolution {
+  country: Country;
+  city: string | null;
+  /** Index of the matching folder inside the photo's relDir (-1 = trip name / path above, or --country) */
+  relIdx: number;
+}
+const relDepth = (relDir: string) => (relDir ? relDir.split("/").length : 0);
 const PHONE_NAME = /^\d{8}[_-]\d{6}/;
 const GPS_SOURCE_EXT = new Set([".jpg", ".jpeg", ".nef", ".nrw", ".dng", ".cr2", ".cr3", ".arw", ".raf", ".orf", ".rw2", ".heic", ".tif", ".tiff"]);
 
@@ -306,10 +280,11 @@ const median = (xs: number[]) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-async function locate(c: Candidate, exif: Exif, filesByDir: Map<string, ScanFile[]>, rootAbs: string, country: Country | null): Promise<Located | null> {
+async function locate(c: Candidate, exif: Exif, filesByDir: Map<string, ScanFile[]>, rootAbs: string, res: Resolution | null): Promise<Located | null> {
+  const country = res?.country ?? null;
   const place = placeFromFolders(c.file.relDir);
   const label = place.label && place.kind !== "flight" ? place.label : null;
-  const nameFor = (spot: string | null) => [spot, country?.name].filter(Boolean).join(", ") || null;
+  const nameFor = (spot: string | null) => placeLabel(spot, country, res && res.relIdx < relDepth(c.file.relDir) - 1 ? res.city : null);
 
   // Tier 1: GPS in the JPG itself (or its original / raw)
   if (exif.lat != null && exif.lng != null) {
@@ -330,42 +305,24 @@ async function locate(c: Candidate, exif: Exif, filesByDir: Map<string, ScanFile
     return { lat: median(pool.map((p) => p.exif.lat!)), lng: median(pool.map((p) => p.exif.lng!)), tier: "folder_exif_match", name: nameFor(label), label, note: `folder median of ${pool.length} GPS photos (no timestamp)` };
   }
 
-  // Tier 3: folder names → Mapbox, one lookup per subfolder
-  if (!country) return null;
-  const iso = country.iso;
+  // Tier 3: folder names → Mapbox (country-filtered, outlier-guarded), one lookup per subfolder
+  if (!country || !res) return null;
+  const token = process.env.MAPBOX_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+  if (!token) fail("No Mapbox token: set NEXT_PUBLIC_MAPBOX_TOKEN in .env.local");
   const cacheKey = `${rootAbs}|${place.from}|${place.kind}`;
   let hit = folderGeo.get(cacheKey);
   if (!hit) {
-    let geo: Geo | null = null;
-    let used = "";
-    const queries: string[] = [];
-    if (place.kind === "flight") {
-      queries.push(`${country.airport}, ${country.name}`);
-    } else {
-      // the folder itself, then each parent folder up to the trip root
-      const parts = c.file.relDir ? c.file.relDir.split("/") : [];
-      for (let i = parts.length; i >= 1; i--) {
-        const p = placeFromFolders(parts.slice(0, i).join("/"));
-        if (p.spot && p.kind !== "flight") {
-          if (country.region) queries.push([p.spot, country.region, country.name].join(", "));
-          queries.push([p.spot, country.name].join(", "));
-        }
-      }
-    }
-    for (const q of [...new Set(queries)]) {
-      geo = await geocode(q, iso);
-      if (geo) {
-        used = q;
-        break;
-      }
-    }
-    hit = { geo, q: used };
+    let queries: string[];
+    if (place.kind === "flight") queries = [`${country.airport}, ${country.name}`];
+    else queries = folderQueries(c.file.relDir ? c.file.relDir.split("/") : [], { country, city: res.city, relIdx: res.relIdx });
+    const g = await geocodeWithGuard(queries, { country, city: res.city }, token!);
+    hit = { geo: g?.geo ?? null, q: g?.used ?? "", fallback: g?.fallback ?? false };
     folderGeo.set(cacheKey, hit);
   }
-  const { geo, q: used } = hit;
+  const { geo, q: used, fallback } = hit;
   if (!geo) return null;
-  const nm = place.kind === "flight" ? `${country.airport}` : used;
-  return { lat: geo.lat, lng: geo.lng, tier: "folder", name: nm, label, note: `Mapbox "${used}"` };
+  const nm = place.kind === "flight" ? `${country.airport}` : fallback ? placeLabel(label, country, res.city) ?? used : used;
+  return { lat: geo.lat, lng: geo.lng, tier: "folder", name: nm, label, note: `Mapbox "${used}"${fallback ? " (outlier/none → city/country fallback)" : ""}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -734,8 +691,13 @@ async function main() {
   const forced = args.country ? COUNTRIES.find((c) => c.name.toLowerCase() === args.country!.toLowerCase()) ?? { name: args.country, iso: "", airport: `international airport`, he: [] } : null;
   // Priority 2: the country in the root trip folder name ("Trip 49 - ... - South Korea") backs up the subfolders
   const rootCountry = countryFromTripName(tripName);
-  const countryOf = (c: Candidate): Country | null =>
-    forced ?? detectCountry([...fullParts, ...(c.file.relDir ? c.file.relDir.split("/") : [])]) ?? rootCountry;
+  const resolveOf = (c: Candidate): Resolution | null => {
+    if (forced) return { country: forced, city: null, relIdx: -1 };
+    const rel = c.file.relDir ? c.file.relDir.split("/") : [];
+    const r = resolveCountry([...fullParts, ...rel]); // deepest folder wins, then up to the trip root
+    if (r) return { country: r.country, city: r.city, relIdx: r.idx - fullParts.length };
+    return rootCountry ? { country: rootCountry, city: null, relIdx: -1 } : null;
+  };
 
   // Supabase (needed for upsert; in a dry run only to tell new from update)
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -770,9 +732,10 @@ async function main() {
     const tag = `[${i}/${list.length}]`;
     const display = `${cand.file.relDir ? `${cand.file.relDir}/` : ""}${cand.file.name}`;
     try {
-      const country = countryOf(cand);
+      const res = resolveOf(cand);
+      const country = res?.country ?? null;
       const exif = await mergedExif(cand);
-      const loc = await locate(cand, exif, filesByDir, root, country);
+      const loc = await locate(cand, exif, filesByDir, root, res);
       const ex = existing.get(cand.key);
 
       if (!loc) {

@@ -217,32 +217,259 @@ export const COUNTRIES: Country[] = [
   { name: "Mexico", iso: "mx", airport: "Mexico City International Airport", he: ["מקסיקו"] },
 ];
 
+// More countries (found via hub cities / aliases below)
+COUNTRIES.push(
+  { name: "Slovakia", iso: "sk", airport: "Bratislava Airport", he: ["סלובקיה"] },
+  { name: "Belgium", iso: "be", airport: "Brussels Airport", he: ["בלגיה"] },
+  { name: "Denmark", iso: "dk", airport: "Copenhagen Airport", he: ["דנמרק"] },
+  { name: "Sweden", iso: "se", airport: "Stockholm Arlanda Airport", he: ["שוודיה"] },
+  { name: "Finland", iso: "fi", airport: "Helsinki Airport", he: ["פינלנד"] },
+  { name: "Serbia", iso: "rs", airport: "Belgrade Nikola Tesla Airport", he: ["סרביה"] },
+  { name: "Bosnia and Herzegovina", iso: "ba", airport: "Sarajevo International Airport", he: ["בוסניה"] },
+  { name: "Lithuania", iso: "lt", airport: "Vilnius Airport", he: ["ליטא"] },
+  { name: "Latvia", iso: "lv", airport: "Riga International Airport", he: ["לטביה"] },
+  { name: "Estonia", iso: "ee", airport: "Tallinn Airport", he: ["אסטוניה"] },
+  { name: "Luxembourg", iso: "lu", airport: "Luxembourg Airport", he: ["לוקסמבורג"] },
+  { name: "Egypt", iso: "eg", airport: "Cairo International Airport", he: ["מצרים"] },
+  { name: "Jordan", iso: "jo", airport: "Queen Alia International Airport", he: ["ירדן"] },
+  { name: "Cyprus", iso: "cy", airport: "Larnaca Airport", he: ["קפריסין"] },
+);
+
+/** Alternative country spellings → ISO */
+const COUNTRY_ALIASES: Record<string, string> = {
+  "czech republic": "cz",
+  czechia: "cz",
+  uk: "gb",
+  england: "gb",
+  wales: "gb",
+  "great britain": "gb",
+  holland: "nl",
+  "the netherlands": "nl",
+  "republic of korea": "kr",
+  korea: "kr",
+};
+
+/** Major cities / hubs → ISO (matched as whole words in a folder name) */
+const HUB_CITIES: Record<string, string> = {
+  vienna: "at", wien: "at", salzburg: "at", innsbruck: "at", hallstatt: "at",
+  bratislava: "sk", kosice: "sk",
+  berlin: "de", munich: "de", frankfurt: "de", hamburg: "de", cologne: "de", dresden: "de", stuttgart: "de", dusseldorf: "de", nuremberg: "de",
+  brussels: "be", bruges: "be", antwerp: "be", ghent: "be",
+  amsterdam: "nl", rotterdam: "nl", "the hague": "nl", utrecht: "nl",
+  paris: "fr", lyon: "fr", marseille: "fr", strasbourg: "fr", bordeaux: "fr",
+  london: "gb", edinburgh: "gb", manchester: "gb", glasgow: "gb", liverpool: "gb",
+  istanbul: "tr", ankara: "tr", antalya: "tr", cappadocia: "tr",
+  prague: "cz", brno: "cz",
+  krakow: "pl", warsaw: "pl", gdansk: "pl", wroclaw: "pl",
+  budapest: "hu",
+  rome: "it", milan: "it", venice: "it", florence: "it", naples: "it", turin: "it", verona: "it",
+  madrid: "es", barcelona: "es", seville: "es", valencia: "es", granada: "es",
+  lisbon: "pt", porto: "pt",
+  athens: "gr", thessaloniki: "gr", santorini: "gr",
+  zurich: "ch", geneva: "ch", bern: "ch", lucerne: "ch", interlaken: "ch",
+  oslo: "no", bergen: "no", tromso: "no",
+  stockholm: "se", copenhagen: "dk", helsinki: "fi",
+  reykjavik: "is", keflavik: "is",
+  dublin: "ie", sofia: "bg", plovdiv: "bg", bucharest: "ro", zagreb: "hr", dubrovnik: "hr", ljubljana: "si", belgrade: "rs", sarajevo: "ba",
+  tirana: "al", podgorica: "me", kotor: "me", tbilisi: "ge", vilnius: "lt", riga: "lv", tallinn: "ee", luxembourg: "lu",
+  seoul: "kr", busan: "kr", jeju: "kr", tokyo: "jp", kyoto: "jp", osaka: "jp", bangkok: "th", beijing: "cn", shanghai: "cn",
+  kampala: "ug", entebbe: "ug", nairobi: "ke", mombasa: "ke", arusha: "tz", zanzibar: "tz", hanoi: "vn", bali: "id", marrakech: "ma", kathmandu: "np",
+  delhi: "in", cairo: "eg", amman: "jo", petra: "jo",
+};
+
+/** Rough country centre + radius (km). A geocode further than radius + SLACK_KM away is an outlier. */
+const COUNTRY_BOUNDS: Record<string, [number, number, number]> = {
+  is: [64.9, -18.6, 350], bg: [42.7, 25.5, 250], at: [47.6, 14.1, 300], cn: [35, 103, 2600], hr: [45.1, 15.2, 300],
+  es: [40.3, -3.7, 1300], nl: [52.2, 5.3, 150], de: [51.2, 10.4, 450], it: [42.5, 12.5, 700], gr: [39, 22.5, 550],
+  fr: [46.6, 2.5, 600], ch: [46.8, 8.2, 200], no: [64, 12, 1100], pt: [39.6, -8, 400], ge: [42.3, 43.4, 250],
+  jp: [36.5, 138, 1500], th: [15, 101, 800], gb: [54, -2.5, 600], si: [46.1, 14.8, 150], cz: [49.8, 15.5, 250],
+  hu: [47.1, 19.4, 250], pl: [52, 19.4, 400], tr: [39, 35, 1000], me: [42.8, 19.2, 150], al: [41.1, 20.1, 200],
+  ro: [45.9, 25, 400], ie: [53.4, -8, 250], fo: [62, -6.9, 100], kr: [36.4, 127.8, 350], ug: [1.3, 32.4, 450],
+  ke: [0.2, 37.9, 700], tz: [-6.3, 34.9, 800], vn: [16, 106, 900], id: [-2.5, 118, 2500], ma: [31.8, -6.5, 800],
+  np: [28.3, 84, 500], in: [22, 79, 2000], mx: [23.6, -102.5, 1800], sk: [48.7, 19.5, 250], be: [50.6, 4.6, 150],
+  dk: [56, 10, 350], se: [62, 15, 900], fi: [64.5, 26, 800], rs: [44, 21, 250], ba: [44, 17.8, 200],
+  lt: [55.3, 23.9, 200], lv: [56.9, 24.9, 200], ee: [58.7, 25.5, 200], lu: [49.8, 6.1, 60], eg: [26.5, 29.8, 900],
+  jo: [31.2, 36.8, 300], cy: [35, 33, 150],
+};
+const SLACK_KM = 500;
+
+export const haversineKm = (aLat: number, aLng: number, bLat: number, bLng: number): number => {
+  const r = Math.PI / 180;
+  const h = Math.sin(((bLat - aLat) * r) / 2) ** 2 + Math.cos(aLat * r) * Math.cos(bLat * r) * Math.sin(((bLng - aLng) * r) / 2) ** 2;
+  return 12742 * Math.asin(Math.min(1, Math.sqrt(h)));
+};
+
+/** Outlier guard: is (lat, lng) within ~500 km of the country's bounds? Unknown country → true. */
+export function plausibleInCountry(iso: string, lat: number, lng: number): boolean {
+  const b = COUNTRY_BOUNDS[iso];
+  if (!b) return true;
+  return haversineKm(lat, lng, b[0], b[1]) <= b[2] + SLACK_KM;
+}
+
+/** Centre of a known country, for the last-resort fallback */
+export function countryCenter(iso: string): { lat: number; lng: number } | null {
+  const b = COUNTRY_BOUNDS[iso];
+  return b ? { lat: b[0], lng: b[1] } : null;
+}
+
+export const countryByIso = (iso: string): Country | null =>
+  COUNTRIES.find((c) => c.iso === iso && !c.region) ?? COUNTRIES.find((c) => c.iso === iso) ?? null;
+
+const plain = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const titleCase = (s: string) => s.replace(/\b\p{L}/gu, (m) => m.toUpperCase());
+
+export interface Resolved {
+  country: Country;
+  /** Hub city that matched ("Bratislava"), when the matching folder named a city */
+  city: string | null;
+  /** Index in the `parts` array handed to resolveCountry where the match was found */
+  idx: number;
+}
+
+function matchSegment(seg: string): { country: Country; city: string | null } | null {
+  const p = norm(seg);
+  // longest Hebrew keyword first so "היער השחור" beats shorter ones
+  const heHit = COUNTRIES.flatMap((c) => c.he.map((k) => ({ c, k })))
+    .filter(({ k }) => p.includes(k))
+    .sort((a, b) => b.k.length - a.k.length)[0];
+  const lp = plain(p);
+  let country: Country | null = heHit?.c ?? null;
+  if (!country) country = COUNTRIES.find((c) => new RegExp(`\\b${escRe(plain(c.name))}\\b`).test(lp)) ?? null;
+  if (!country) {
+    const alias = Object.entries(COUNTRY_ALIASES).find(([k]) => new RegExp(`\\b${escRe(k)}\\b`).test(lp));
+    if (alias) country = countryByIso(alias[1]);
+  }
+  let city: string | null = null;
+  let hubIso: string | null = null;
+  for (const [h, iso] of Object.entries(HUB_CITIES)) {
+    if (new RegExp(`\\b${escRe(h)}\\b`).test(lp)) {
+      city = titleCase(h);
+      hubIso = iso;
+      break;
+    }
+  }
+  if (!country && hubIso) country = countryByIso(hubIso);
+  return country ? { country, city } : null;
+}
+
+/**
+ * Bottom-up country resolution: the DEEPEST folder that names a known country or hub city wins
+ * ("Trip 35 - Vienna/30 - 30.04 - Bratislava/4 - Old Town" → Slovakia; ".../2 - 28.04 - Stephansplatz" → Austria).
+ * Inside one folder name the last " - " part is tried first.
+ */
+export function resolveCountry(parts: string[]): Resolved | null {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const segs = norm(parts[i]).split(/\s+[-–]\s+/).reverse();
+    for (const seg of segs) {
+      const hit = matchSegment(seg);
+      if (hit) return { ...hit, idx: i };
+    }
+  }
+  return null;
+}
+
+/** Country from any folder name in the path (deepest first) */
+export function detectCountry(parts: string[]): Country | null {
+  return resolveCountry(parts)?.country ?? null;
+}
+
 /**
  * Country named in the ROOT trip folder: "Trip 49 - 17.09 - 1.10.26 - South Korea" → South Korea.
- * Known countries match by name anywhere in the folder name; otherwise the last " - " segment is used as an
+ * Known countries / hub cities match anywhere in the folder name; otherwise the last " - " segment is used as an
  * ad-hoc country (no ISO filter), so subfolder geocoding still gets a country without --country.
  */
 export function countryFromTripName(tripName: string): Country | null {
   const name = norm(tripName);
   const known = detectCountry([name]);
   if (known) return known;
-  const last = name.split(/\s+[-\u2013]\s+/).pop()?.trim() ?? "";
-  if (!/^[\p{L}][\p{L}\s.'\u2019]{1,40}$/u.test(last) || /^trip\b/i.test(last)) return null;
+  const last = name.split(/\s+[-–]\s+/).pop()?.trim() ?? "";
+  if (!/^[\p{L}][\p{L}\s.'’]{1,40}$/u.test(last) || /^trip\b/i.test(last)) return null;
   return { name: last, iso: "", airport: "international airport", he: [] };
 }
 
-/** Country from any folder name in the path (deepest first): Hebrew keyword or the English name */
-export function detectCountry(parts: string[]): Country | null {
-  for (const part of [...parts].reverse()) {
-    const p = norm(part);
-    // longest Hebrew keyword first so "היער השחור" beats shorter ones
-    const hit = COUNTRIES.flatMap((c) => c.he.map((k) => ({ c, k })))
-      .filter(({ k }) => p.includes(k))
-      .sort((a, b) => b.k.length - a.k.length)[0];
-    if (hit) return hit.c;
-    const en = COUNTRIES.find((c) => new RegExp(`\\b${c.name}\\b`, "i").test(p));
-    if (en) return en;
+/** "Old Town" + city "Bratislava" + country → "Old Town, Bratislava, Slovakia" (city skipped if the spot already names it) */
+export function placeLabel(spot: string | null, country: Country | null, city: string | null): string | null {
+  const c = city && spot && plain(spot).includes(plain(city)) ? null : city;
+  return [spot, c, country?.name].filter(Boolean).join(", ") || null;
+}
+
+/** Mapbox queries for a folder path, deepest folder first; spots below the hub-city folder carry the city name */
+export function folderQueries(relParts: string[], r: { country: Country; city: string | null; relIdx: number }): string[] {
+  const out: string[] = [];
+  for (let i = relParts.length; i >= 1; i--) {
+    const p = placeFromFolders(relParts.slice(0, i).join("/"));
+    if (!p.spot || p.kind === "flight") continue;
+    const withCity = r.city && r.relIdx < i - 1 && !plain(p.spot).includes(plain(r.city));
+    if (r.country.region) out.push([p.spot, r.country.region, r.country.name].join(", "));
+    if (withCity) out.push([p.spot, r.city, r.country.name].join(", "));
+    out.push([p.spot, r.country.name].join(", "));
   }
+  return [...new Set(out)];
+}
+
+// ---------------------------------------------------------------------------
+// Mapbox geocoding (cached). `iso` is sent as &country= so namesakes (Berlin VT, Rome NY) never win.
+// ---------------------------------------------------------------------------
+
+export interface Geo {
+  lat: number;
+  lng: number;
+  name: string;
+}
+const geoCache = new Map<string, Geo | null>();
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function geocode(q: string, iso: string | null, token: string): Promise<Geo | null> {
+  const key = `${q}|${iso ?? ""}`;
+  if (geoCache.has(key)) return geoCache.get(key)!;
+  const url =
+    `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(q)}&limit=1&language=en` +
+    `${iso ? `&country=${iso}` : ""}&access_token=${token}`;
+  let result: Geo | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+      if (res.status === 429) {
+        await wait(1500 * 2 ** attempt);
+        continue;
+      }
+      if (!res.ok) break;
+      const data = (await res.json()) as { features?: { geometry?: { coordinates?: [number, number] }; properties?: { name?: string; full_address?: string } }[] };
+      const f = data.features?.[0];
+      const c = f?.geometry?.coordinates;
+      if (c && Number.isFinite(c[0]) && Number.isFinite(c[1])) result = { lat: c[1], lng: c[0], name: f?.properties?.full_address ?? f?.properties?.name ?? q };
+      break;
+    } catch {
+      await wait(1000 * 2 ** attempt);
+    }
+  }
+  geoCache.set(key, result);
+  return result;
+}
+
+/**
+ * Geocode the queries in order, rejecting outliers (outside the country's bounds + 500 km). Falls back to the hub
+ * city, then the country centre. Returns null only if nothing is known.
+ */
+export async function geocodeWithGuard(
+  queries: string[],
+  r: { country: Country; city: string | null },
+  token: string,
+): Promise<{ geo: Geo; used: string; fallback: boolean } | null> {
+  const iso = r.country.iso || null;
+  const ok = (g: Geo | null) => (g && (!iso || plausibleInCountry(iso, g.lat, g.lng)) ? g : null);
+  for (const q of queries) {
+    const g = ok(await geocode(q, iso, token));
+    if (g) return { geo: g, used: q, fallback: false };
+  }
+  if (r.city) {
+    const q = `${r.city}, ${r.country.name}`;
+    const g = ok(await geocode(q, iso, token));
+    if (g) return { geo: g, used: q, fallback: true };
+  }
+  const c = iso ? countryCenter(iso) : null;
+  if (c) return { geo: { lat: c.lat, lng: c.lng, name: r.country.name }, used: r.country.name, fallback: true };
   return null;
 }
 
