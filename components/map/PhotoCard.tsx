@@ -98,6 +98,8 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   const setPhotographer = useMapStore((s) => s.setPhotographer);
   const activePhotographer = useMapStore((s) => s.filters.photographer);
   const select = useMapStore((s) => s.select);
+  const exactGps = useMapStore((s) => s.exactGps);
+  const setExactGps = useMapStore((s) => s.setExactGps);
   const currentUserId = useMapStore((s) => s.currentUserId);
   const startGpsEdit = useMapStore((s) => s.startGpsEdit);
   const walk = useMapStore((s) => s.walk);
@@ -240,7 +242,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
         )}
         {stackPos > 0 && (
           <span className="absolute bottom-2 right-2 z-10 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-medium text-white/90 backdrop-blur">
-            {stackPos} of {stack.length} on this pin
+            {stackPos} of {stack.length}
           </span>
         )}
       </div>
@@ -347,6 +349,18 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
           )}
           {copied === "gps" && <span className="text-[10px] text-emerald-300">Copied</span>}
         </div>
+
+        {(stack.length > 1 || exactGps) && (
+          <button
+            type="button"
+            onClick={() => setExactGps(!exactGps)}
+            aria-pressed={exactGps}
+            title="Off: photos of one spot stay grouped. On: the map zooms in and spreads a pin per exact GPS coordinate"
+            className={`!mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${exactGps ? "bg-amber-300 text-neutral-900 hover:bg-amber-200" : "bg-white/10 text-neutral-100 hover:bg-white/15"}`}
+          >
+            {Icon.gps} Spread Exact GPS Spots{exactGps ? " · on" : ""}
+          </button>
+        )}
 
         {when && (
           <p className="flex items-center gap-1.5 text-xs text-neutral-400">

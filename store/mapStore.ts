@@ -5,6 +5,8 @@ import { EMPTY_FILTERS, type Photo, type PhotoFilters } from "@/types/photo";
 import { EMPTY_GEAR, type GearFilters } from "@/lib/gear";
 
 export type MapMode = "dark" | "satellite" | "terrain";
+/** Pins / Dots (default), stacked Thumbnails, or a density Heatmap */
+export type ViewMode = "dots" | "thumbs" | "heat";
 export const DEFAULT_WALK_RADIUS_KM = 15;
 
 export interface Bounds { north: number; south: number; east: number; west: number }
@@ -33,6 +35,25 @@ interface MapState {
   /** Photo whose card is open */
   selectedId: string | null;
   select: (id: string | null) => void;
+  /** A clicked cluster: its photos browsed in order in the card carousel (null = the pin's own group) */
+  carouselIds: string[] | null;
+  openCarousel: (ids: string[]) => void;
+
+  /** Map view mode switcher */
+  viewMode: ViewMode;
+  setViewMode: (m: ViewMode) => void;
+  /** "Spread Exact GPS Spots": split groups into one sub-pin per exact GPS coordinate */
+  exactGps: boolean;
+  setExactGps: (on: boolean) => void;
+  /** Country picked on the map / in the sidebar (canonical name) */
+  countryFilter: string | null;
+  setCountryFilter: (c: string | null) => void;
+  /** A place picked in the sidebar (exact location name) */
+  spotFilter: string | null;
+  setSpotFilter: (name: string | null) => void;
+  /** Dashed chronological line through the filtered photos */
+  showTimeline: boolean;
+  setShowTimeline: (on: boolean) => void;
 
   /** "Pick location on map" mode */
   pickMode: boolean;
@@ -101,11 +122,24 @@ export const useMapStore = create<MapState>((set) => ({
   setHovered: (hoveredId) => set({ hoveredId }),
 
   selectedId: null,
-  select: (selectedId) => set({ selectedId }),
+  select: (selectedId) => set((s) => ({ selectedId, carouselIds: selectedId && s.carouselIds?.includes(selectedId) ? s.carouselIds : null })),
+  carouselIds: null,
+  openCarousel: (ids) => set({ carouselIds: ids.length > 1 ? ids : null, selectedId: ids[0] ?? null }),
+
+  viewMode: "dots",
+  setViewMode: (viewMode) => set({ viewMode }),
+  exactGps: false,
+  setExactGps: (exactGps) => set({ exactGps }),
+  countryFilter: null,
+  setCountryFilter: (countryFilter) => set({ countryFilter, spotFilter: null }),
+  spotFilter: null,
+  setSpotFilter: (spotFilter) => set({ spotFilter }),
+  showTimeline: false,
+  setShowTimeline: (showTimeline) => set({ showTimeline }),
 
   pickMode: false,
   pickedLocation: null,
-  startPick: () => set({ pickMode: true, selectedId: null, gpsEdit: null }),
+  startPick: () => set({ pickMode: true, selectedId: null, carouselIds: null, gpsEdit: null }),
   cancelPick: () => set({ pickMode: false }),
   setPicked: (pickedLocation) => set({ pickedLocation, pickMode: false }),
 
@@ -122,7 +156,7 @@ export const useMapStore = create<MapState>((set) => ({
 
   deleted: {},
   markDeleted: (id) =>
-    set((s) => ({ deleted: { ...s.deleted, [id]: true }, selectedId: s.selectedId === id ? null : s.selectedId, hoveredId: s.hoveredId === id ? null : s.hoveredId })),
+    set((s) => ({ deleted: { ...s.deleted, [id]: true }, selectedId: s.selectedId === id ? null : s.selectedId, carouselIds: s.carouselIds?.filter((x) => x !== id) ?? null, hoveredId: s.hoveredId === id ? null : s.hoveredId })),
 
   activeCollection: null,
   setActiveCollection: (activeCollection) => set((s) => (activeCollection ? { activeCollection, walk: null, walkStops: [] } : { activeCollection })),

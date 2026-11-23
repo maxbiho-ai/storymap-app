@@ -1,4 +1,7 @@
 import type { Photo } from "@/types/photo";
+
+/** What the light / gear filters read: satisfied by a full Photo and by a lightweight map pin */
+export type GearSubject = Pick<Photo, "taken_at" | "latitude" | "longitude" | "lens" | "shutter_speed">;
 import { getSolarPhase } from "@/lib/timeOfDay";
 
 export type LightKey = "blue" | "sunrise" | "sunset" | "night";
@@ -33,20 +36,20 @@ export function shutterSeconds(s: string | null): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-export const isLongExposure = (p: Photo) => (shutterSeconds(p.shutter_speed) ?? 0) >= 1;
+export const isLongExposure = (p: Pick<Photo, "shutter_speed">) => (shutterSeconds(p.shutter_speed) ?? 0) >= 1;
 
 /**
  * Light condition at capture, from the timestamp + GPS (not from tags, so older photos work too).
  * Blue hour = twilight around sunrise / sunset; sunrise / sunset = their golden-hour windows.
  */
-export function lightKeyOf(p: Photo): LightKey | "day" | null {
+export function lightKeyOf(p: Pick<Photo, "taken_at" | "latitude" | "longitude">): LightKey | "day" | null {
   const s = getSolarPhase(p.taken_at, p.latitude, p.longitude);
   if (!s) return null;
   if (s.blueHour) return "blue";
   return s.phase === "day" ? "day" : s.phase;
 }
 
-export function matchesGear(p: Photo, g: GearFilters): boolean {
+export function matchesGear(p: GearSubject, g: GearFilters): boolean {
   if (g.lens && p.lens !== g.lens) return false;
   if (g.longExposure && !isLongExposure(p)) return false;
   if (g.light.length) {
@@ -57,7 +60,7 @@ export function matchesGear(p: Photo, g: GearFilters): boolean {
 }
 
 /** Distinct lenses with counts, most used first */
-export function lensOptions(photos: Photo[]): { lens: string; count: number }[] {
+export function lensOptions(photos: Pick<Photo, "lens">[]): { lens: string; count: number }[] {
   const m = new Map<string, number>();
   for (const p of photos) if (p.lens?.trim()) m.set(p.lens, (m.get(p.lens) ?? 0) + 1);
   return [...m].map(([lens, count]) => ({ lens, count })).sort((a, b) => b.count - a.count || a.lens.localeCompare(b.lens));

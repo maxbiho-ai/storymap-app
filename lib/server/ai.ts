@@ -413,3 +413,98 @@ export function cleanTitle(raw: unknown): string | null {
   while (cut.length > 4 && DANGLING.has(cut[cut.length - 1].toLowerCase())) cut.pop();
   return cut.join(" ");
 }
+
+// ---------------------------------------------------------------------------
+// Photo Scout: "Plan a Photo Trip" spot recommendations along a day's route
+// ---------------------------------------------------------------------------
+
+export type ScoutPhase = "sunrise" | "sunset" | "midday";
+
+export interface ScoutSpot {
+  name: string;
+  latitude: number;
+  longitude: number;
+  phase: ScoutPhase;
+  /** One short sentence: what to shoot and why it works in that light */
+  reason: string | null;
+}
+
+export interface ScoutInput {
+  date: string;
+  stops: { name: string; latitude: number; longitude: number }[];
+}
+
+const kmBetween = (aLat: number, aLng: number, bLat: number, bLng: number) => {
+  const r = Math.PI / 180;
+  const h = Math.sin(((bLat - aLat) * r) / 2) ** 2 + Math.cos(aLat * r) * Math.cos(bLat * r) * Math.sin(((bLng - aLng) * r) / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(h));
+};
+
+/**
+ * Real, specific photography viewpoints around a day's stops, per light (sunrise / sunset / midday).
+ * Coordinates that fall far from every stop are dropped as hallucinations. Never throws: [] when the model is down.
+ */
+export async function aiPhotoSpots(input: ScoutInput): Promise<ScoutSpot[]> {
+  if (!geminiConfigured() || !input.stops.length) return [];
+  const stops = input.stops.slice(0, 8);
+  try {
+    const out = await geminiJson<{ spots?: { name?: unknown; latitude?: unknown; longitude?: unknown; phase?: unknown; reason?: unknown }[] }>(
+      [
+        {
+          text: [
+            "You are a landscape and travel photography scout. Recommend REAL, specific photography viewpoints for one day of a trip.",
+            `Date: ${input.date}.`,
+            "The day's stops, in order:",
+            ...stops.map((s, i) => `${i + 1}. ${s.name} (${s.latitude.toFixed(4)}, ${s.longitude.toFixed(4)})`),
+            "",
+            "Rules:",
+            "- Suggest 2 or 3 spots for each phase: sunrise, sunset, midday. Spots must lie on or near the route (within about 30 km of a stop).",
+            "- Only named places that really exist (viewpoints, bridges, squares, peaks, lakes, streets, ruins, parks). Never invent a place; if unsure, leave it out.",
+            "- latitude / longitude: decimal degrees of that exact place, as accurate as you can.",
+            "- reason: one short English sentence (max 140 characters) on what to shoot and why this light suits it. Plain hyphens only, no emojis.",
+          ].join("\n"),
+        },
+      ],
+      {
+        type: "OBJECT",
+        properties: {
+          spots: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                name: { type: "STRING" },
+                latitude: { type: "NUMBER" },
+                longitude: { type: "NUMBER" },
+                phase: { type: "STRING", enum: ["sunrise", "sunset", "midday"] },
+                reason: { type: "STRING" },
+              },
+              required: ["name", "latitude", "longitude", "phase", "reason"],
+            },
+          },
+        },
+        required: ["spots"],
+      },
+      22_000,
+      25_000,
+    );
+    const seen = new Set<string>();
+    const spots: ScoutSpot[] = [];
+    for (const s of out.spots ?? []) {
+      const name = typeof s.name === "string" ? noLongDashes(s.name).replace(/\s+/g, " ").trim().slice(0, 120) : "";
+      const lat = Number(s.latitude);
+      const lng = Number(s.longitude);
+      const phase = s.phase === "sunrise" || s.phase === "sunset" || s.phase === "midday" ? s.phase : null;
+      if (!name || !phase || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
+      if (Math.min(...stops.map((st) => kmBetween(lat, lng, st.latitude, st.longitude))) > 60) continue;
+      const key = `${phase}|${name.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      spots.push({ name, latitude: lat, longitude: lng, phase, reason: cleanNote(s.reason) });
+    }
+    return spots.slice(0, 12);
+  } catch (err) {
+    console.error("[ai/photo-spots]", err);
+    return [];
+  }
+}

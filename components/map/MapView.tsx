@@ -4,14 +4,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Map, { Marker, NavigationControl, GeolocateControl, Source, Layer, useMap, type ViewStateChangeEvent, type MapLayerMouseEvent } from "react-map-gl";
 import type { Photo } from "@/types/photo";
 import { useMapStore, roundBounds, type Bounds } from "@/store/mapStore";
-import { useClusters, stackOf, imageCount } from "@/hooks/useClusters";
+import { useClusters, type ClusterItem } from "@/hooks/useClusters";
+import { boundsOf, distKm, exactKey, type Pin, type PinGroup } from "@/lib/pins";
+import { canonicalCountry } from "@/lib/countries";
 import PhotoPin from "./PhotoPin";
 import ClusterPin from "./ClusterPin";
+import DotPin from "./DotPin";
 import PhotoPopup from "./PhotoPopup";
 import PickModeBanner from "./PickModeBanner";
 import GpsEditBanner from "./GpsEditBanner";
 import SunCompass from "./SunCompass";
 import MapStyleSwitcher from "./MapStyleSwitcher";
+import CountryLayer from "./CountryLayer";
+import TripLayer from "@/components/trip/TripLayer";
 import { destination } from "@/lib/sunMoon";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { MAP_ID } from "./constants";
@@ -21,10 +26,20 @@ export { MAP_ID };
 const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
 interface Props {
-  photos: Photo[];
+  /** Every pin matching the filters (the lightweight global layer) */
+  pins: Pin[];
+  /** The pins merged into spots (or exact-GPS stacks) */
+  groups: PinGroup[];
+  /** The open card's photo (full row) and the photos browsed with its carousel */
+  selected?: Photo;
+  stack: Photo[];
+  /** canonical country → photo count */
+  countryCounts: Map<string, number>;
   mapStyle?: string;
   /** Trip list view: [lng, lat] points joined by a route line, in list order */
   route?: [number, number][];
+  /** Chronological dashed line through the filtered photos (EXIF time order) */
+  timeline?: [number, number][];
 }
 
 function readBounds(e: { target: mapboxgl.Map }): Bounds {
@@ -38,7 +53,14 @@ const STYLES = {
   terrain: "mapbox://styles/mapbox/satellite-streets-v12",
 } as const;
 
-export default function MapView({ photos, mapStyle, route }: Props) {
+/** Popup geometry: the card sits POPUP_GAP above its pin; the sun compass needs BELOW_PIN beneath it */
+const POPUP_GAP = 70;
+const BELOW_PIN = 128;
+const CARD_W = 340;
+
+const lineFc = (coordinates: [number, number][]) => ({ type: "Feature" as const, properties: {}, geometry: { type: "LineString" as const, coordinates } });
+
+export default function MapView({ pins, groups, selected, stack, countryCounts, mapStyle, route, timeline }: Props) {
   const { [MAP_ID]: map } = useMap();
   const bounds = useMapStore((s) => s.bounds);
   const setViewport = useMapStore((s) => s.setViewport);
@@ -46,6 +68,7 @@ export default function MapView({ photos, mapStyle, route }: Props) {
   const setHovered = useMapStore((s) => s.setHovered);
   const selectedId = useMapStore((s) => s.selectedId);
   const select = useMapStore((s) => s.select);
+  const openCarousel = useMapStore((s) => s.openCarousel);
   const pickMode = useMapStore((s) => s.pickMode);
   const pickedLocation = useMapStore((s) => s.pickedLocation);
   const setPicked = useMapStore((s) => s.setPicked);
@@ -55,6 +78,10 @@ export default function MapView({ photos, mapStyle, route }: Props) {
   const cancelGpsEdit = useMapStore((s) => s.cancelGpsEdit);
   const isDesktop = useIsDesktop();
   const mapMode = useMapStore((s) => s.mapMode);
+  const viewMode = useMapStore((s) => s.viewMode);
+  const exactGps = useMapStore((s) => s.exactGps);
+  const countryFilter = useMapStore((s) => s.countryFilter);
+  const setCountryFilter = useMapStore((s) => s.setCountryFilter);
   const zoom = useMapStore((s) => s.zoom);
   const walk = useMapStore((s) => s.walk);
   const walkStops = useMapStore((s) => s.walkStops);
@@ -62,53 +89,90 @@ export default function MapView({ photos, mapStyle, route }: Props) {
 
   // זום שלם — לחישוב מחדש של ה-clusters *תוך כדי* זום, לא רק בסופו
   const [zoomLevel, setZoomLevel] = useState(2);
-  const clusters = useClusters(photos, bounds, zoomLevel);
+  const { items, leaves } = useClusters(groups, bounds, zoomLevel);
 
-  const byId = useMemo(() => new globalThis.Map(photos.map((p) => [p.id, p])), [photos]);
-  const selected = selectedId ? byId.get(selectedId) : undefined;
-  const hovered = hoveredId ? byId.get(hoveredId) : undefined;
-  const selectedStack = useMemo(() => (selected ? stackOf(photos, selected) : []), [photos, selected]);
+  const pinById = useMemo(() => new globalThis.Map(pins.map((p) => [p.id, p])), [pins]);
+  const hovered = hoveredId ? pinById.get(hoveredId) : undefined;
+  const selectedGroupKey = useMemo(
+    () => (selectedId ? groups.find((g) => g.members.some((m) => m.id === selectedId))?.key : undefined),
+    [groups, selectedId],
+  );
+  const [dotHover, setDotHover] = useState<{ longitude: number; latitude: number; pin: Pin; count: number } | null>(null);
+
   // Snapshot: the photo may leave the loaded area while the owner pans to its new spot
   const editingSnap = useRef<Photo | undefined>(undefined);
-  const editingLive = gpsEdit ? byId.get(gpsEdit.photoId) : undefined;
+  const editingLive = gpsEdit && selected?.id === gpsEdit.photoId ? selected : undefined;
   if (editingLive) editingSnap.current = editingLive;
   const editing = gpsEdit ? editingLive ?? (editingSnap.current?.id === gpsEdit.photoId ? editingSnap.current : undefined) : undefined;
-  const editingStackSize = useMemo(() => (editing ? stackOf(photos, editing).length : 0), [photos, editing]);
+  const editingStackSize = useMemo(() => {
+    if (!editing) return 0;
+    const k = exactKey(editing);
+    return pins.reduce((n, p) => n + (exactKey(p) === k ? 1 : 0), 0);
+  }, [pins, editing]);
   const busy = pickMode || Boolean(gpsEdit);
+
   // Walk radius ring around the origin pin
   const ringData = useMemo(() => {
     if (!walk) return null;
     const { latitude: lat, longitude: lng } = walk.origin;
     const pts = Array.from({ length: 97 }, (_, i) => destination(lat, lng, i * 3.75, walk.radiusKm * 1000));
-    return { type: "Feature" as const, properties: {}, geometry: { type: "LineString" as const, coordinates: pts } };
+    return lineFc(pts);
   }, [walk]);
-  const routeData = useMemo(
+  const routeData = useMemo(() => (route && route.length > 1 ? lineFc(route) : null), [route]);
+  const timelineData = useMemo(() => (timeline && timeline.length > 1 ? lineFc(timeline) : null), [timeline]);
+  const heatData = useMemo(
     () =>
-      route && route.length > 1
-        ? { type: "Feature" as const, properties: {}, geometry: { type: "LineString" as const, coordinates: route } }
+      viewMode === "heat"
+        ? {
+            type: "FeatureCollection" as const,
+            features: pins.map((p) => ({ type: "Feature" as const, properties: {}, geometry: { type: "Point" as const, coordinates: [p.longitude, p.latitude] } })),
+          }
         : null,
-    [route],
+    [viewMode, pins],
   );
 
   const onMove = useCallback((e: ViewStateChangeEvent) => {
     const z = Math.floor(e.viewState.zoom);
     setZoomLevel((prev) => (prev === z ? prev : z));
   }, []);
-
-  // bounds בזמן אמת → usePhotoSearch טוען את האזור (debounce 300ms בתוך ה-hook)
-  const onMoveEnd = useCallback(
-    (e: ViewStateChangeEvent) => setViewport(readBounds(e), e.viewState.zoom),
-    [setViewport],
-  );
+  const onMoveEnd = useCallback((e: ViewStateChangeEvent) => setViewport(readBounds(e), e.viewState.zoom), [setViewport]);
 
   const onClick = useCallback(
     (e: MapLayerMouseEvent) => {
-      if (gpsEdit) setGpsEditPoint({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
-      else if (pickMode) setPicked({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
-      else select(null);
+      if (gpsEdit) return setGpsEditPoint({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
+      if (pickMode) return setPicked({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
+      // An open card closes first; the next click on a country filters by it
+      if (selectedId) return select(null);
+      const m = e.target;
+      if (m.getLayer("country-fill")) {
+        const f = m.queryRenderedFeatures(e.point, { layers: ["country-fill"] })[0];
+        const canon = canonicalCountry(f?.properties?.name_en as string | undefined);
+        if (canon && countryCounts.has(canon)) setCountryFilter(canon);
+      }
     },
-    [gpsEdit, setGpsEditPoint, pickMode, setPicked, select],
+    [gpsEdit, setGpsEditPoint, pickMode, setPicked, select, selectedId, countryCounts, setCountryFilter],
   );
+
+  /** A cluster: a compact one opens the carousel (1 of N, with arrows); a big / spread one zooms in */
+  const onClusterClick = (c: Extract<ClusterItem, { kind: "cluster" }>) => {
+    const lv = leaves(c.id);
+    const members = lv.flatMap((g) => g.members);
+    const box = boundsOf(lv);
+    const diagKm = box ? distKm(box[0][1], box[0][0], box[1][1], box[1][0]) : Infinity;
+    if (!exactGps && members.length <= 80 && diagKm <= 5) {
+      setDotHover(null);
+      members.sort((a, b) => (a.ts ?? Infinity) - (b.ts ?? Infinity) || (a.id < b.id ? -1 : 1));
+      openCarousel(members.map((m) => m.id));
+    } else {
+      map?.flyTo({ center: [c.longitude, c.latitude], zoom: c.expansionZoom, duration: 900, essential: true });
+    }
+  };
+
+  const onGroupClick = (g: PinGroup) => {
+    setDotHover(null);
+    const open = g.members.find((m) => m.id === selectedId) ?? g.members[0];
+    select(open.id);
+  };
 
   // Esc יוצא ממצב בחירה / סוגר popup
   useEffect(() => {
@@ -130,6 +194,89 @@ export default function MapView({ photos, mapStyle, route }: Props) {
     map.flyTo({ center: [longitude, latitude], zoom: Math.max(map.getZoom(), 14), duration: 800, essential: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editPhotoId, map]);
+
+  // "Spread Exact GPS Spots" switched ON: zoom into the open spot so each GPS coordinate becomes its own pin
+  const prevExact = useRef(exactGps);
+  useEffect(() => {
+    const was = prevExact.current;
+    prevExact.current = exactGps;
+    if (!exactGps || was || !map) return;
+    const box = boundsOf(stack.length ? stack : selected ? [selected] : []);
+    if (!box) return;
+    const same = box[0][0] === box[1][0] && box[0][1] === box[1][1];
+    if (same) map.flyTo({ center: box[0], zoom: Math.max(map.getZoom(), 17), duration: 900, essential: true });
+    else map.fitBounds(box, { padding: { top: 160, bottom: 160, left: isDesktop ? 400 : 60, right: 60 }, maxZoom: 19, duration: 1000 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exactGps, map]);
+
+  /* ---------------- Viewport-safe photo card ---------------- */
+  const [cardH, setCardH] = useState(520);
+  const [cardMax, setCardMax] = useState<number | undefined>(undefined);
+  const selLat = selected?.latitude;
+  const selLng = selected?.longitude;
+  const selKey = selected?.id;
+
+  useEffect(() => {
+    const m = map?.getMap();
+    if (!m || !selKey || selLat == null || selLng == null || busy) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const fit = () => {
+      if (cancelled) return;
+      if (m.isMoving()) {
+        m.once("moveend", fit);
+        return;
+      }
+      const rect = m.getContainer().getBoundingClientRect();
+      const W = rect.width;
+      const H = rect.height;
+      const headerBottom = document.querySelector("header")?.getBoundingClientRect().bottom ?? 80;
+      const top = Math.max(0, headerBottom - rect.top) + 12;
+      const p = m.project([selLng, selLat]);
+      let targetX = p.x;
+      let targetY = p.y;
+
+      if (isDesktop) {
+        // The card scrolls inside, so it can always fit: top bar (photographer + X) .. image .. EXIF .. pin + compass
+        const maxH = Math.max(280, H - top - POPUP_GAP - BELOW_PIN - 12);
+        setCardMax(maxH);
+        const ch = Math.min(cardH, maxH);
+        const minY = top + ch + POPUP_GAP;
+        const maxY = H - BELOW_PIN - 4;
+        targetY = minY > maxY ? minY : Math.min(Math.max(p.y, minY), maxY);
+        const left = 372 + CARD_W / 2; // the sidebar covers the left 372px
+        const minX = left;
+        const maxX = W - CARD_W / 2 - 12;
+        targetX = minX > maxX ? (372 + W) / 2 : Math.min(Math.max(p.x, minX), maxX);
+      } else {
+        // Phone: the card is a bottom sheet; keep the pin + compass in the strip above it
+        const sheet = document.querySelector("[data-photo-drawer] > div")?.getBoundingClientRect();
+        const bottomLimit = (sheet ? sheet.top - rect.top : H * 0.5) - 12;
+        const minY = top + 110;
+        const maxY = bottomLimit - 110;
+        targetY = minY > maxY ? (top + bottomLimit) / 2 : Math.min(Math.max(p.y, minY), maxY);
+        targetX = Math.min(Math.max(p.x, 50), W - 50);
+      }
+
+      const dx = targetX - p.x;
+      const dy = targetY - p.y;
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return; // already fully visible
+      // Same result as easeTo + padding, without leaving a permanent camera padding behind
+      m.easeTo({ center: m.unproject([W / 2 - dx, H / 2 - dy]), duration: 550, essential: true });
+    };
+
+    timer = setTimeout(fit, 90);
+    window.addEventListener("resize", fit);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      m.off("moveend", fit);
+      window.removeEventListener("resize", fit);
+    };
+    // Re-checked when another photo opens or the card grows / shrinks
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selKey, Math.round(cardH / 24), busy, isDesktop, map]);
 
   // 3D terrain: the DEM source + terrain are set on the raw map (and again whenever a style swap wipes them)
   useEffect(() => {
@@ -170,6 +317,73 @@ export default function MapView({ photos, mapStyle, route }: Props) {
     );
   }
 
+  const markersVisible = !pickMode && (viewMode !== "heat" || zoomLevel >= 11);
+
+  const renderItem = (c: ClusterItem) => {
+    if (c.kind === "cluster") {
+      return viewMode === "thumbs" ? (
+        <ClusterPin
+          key={`c-${c.id}`}
+          longitude={c.longitude}
+          latitude={c.latitude}
+          count={c.count}
+          preview={c.preview}
+          dimmed={Boolean(gpsEdit)}
+          onClick={() => onClusterClick(c)}
+        />
+      ) : (
+        <DotPin
+          key={`c-${c.id}`}
+          longitude={c.longitude}
+          latitude={c.latitude}
+          count={c.count}
+          dimmed={Boolean(gpsEdit)}
+          onClick={() => onClusterClick(c)}
+          onHover={(h) => setDotHover(h && c.preview[0] ? { longitude: c.longitude, latitude: c.latitude, pin: c.preview[0], count: c.count } : null)}
+        />
+      );
+    }
+
+    const g = c.group;
+    // While editing, the edited photo is drawn by the draggable marker instead
+    const members = gpsEdit ? g.members.filter((p) => p.id !== gpsEdit.photoId) : g.members;
+    if (!members.length) return null;
+    const isSel = !gpsEdit && g.key === selectedGroupKey;
+
+    if (viewMode === "thumbs") {
+      // A selected / hovered member is shown on top of its pile
+      const top = members.find((p) => p.id === selectedId) ?? members.find((p) => p.id === hoveredId) ?? members[0];
+      const pos = members.length > 1 && isSel ? members.indexOf(top) + 1 : undefined;
+      return (
+        <PhotoPin
+          key={`s-${g.key}`}
+          photo={top}
+          longitude={g.longitude}
+          latitude={g.latitude}
+          count={members.length}
+          position={gpsEdit ? undefined : pos}
+          highlighted={!gpsEdit && members.some((p) => p.id === hoveredId)}
+          selected={isSel}
+          dimmed={Boolean(gpsEdit)}
+          onHover={setHovered}
+          onSelect={() => onGroupClick(g)}
+        />
+      );
+    }
+    return (
+      <DotPin
+        key={`s-${g.key}`}
+        longitude={g.longitude}
+        latitude={g.latitude}
+        count={members.length}
+        active={isSel || members.some((p) => p.id === hoveredId)}
+        dimmed={Boolean(gpsEdit)}
+        onClick={() => onGroupClick(g)}
+        onHover={(h) => setDotHover(h ? { longitude: g.longitude, latitude: g.latitude, pin: members[0], count: members.length } : null)}
+      />
+    );
+  };
+
   return (
     <Map
       id={MAP_ID}
@@ -196,6 +410,32 @@ export default function MapView({ photos, mapStyle, route }: Props) {
         </>
       )}
 
+      {/* Countries with photos: hover highlight + tooltip, click filters */}
+      <CountryLayer counts={countryCounts} active={countryFilter} disabled={busy} />
+
+      {/* Heatmap view: photo density hotspots (dots take over once zoomed in) */}
+      {heatData && (
+        <Source id="pins-heat" type="geojson" data={heatData}>
+          <Layer
+            id="pins-heat-layer"
+            type="heatmap"
+            paint={
+              {
+                "heatmap-weight": 1,
+                "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 0.6, 9, 2.4],
+                "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 0, 6, 6, 18, 12, 34],
+                "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 9, 0.95, 14, 0.45],
+                "heatmap-color": [
+                  "interpolate", ["linear"], ["heatmap-density"],
+                  0, "rgba(0,0,0,0)", 0.15, "rgba(37,99,235,0.45)", 0.35, "rgba(20,184,166,0.65)",
+                  0.55, "rgba(250,204,21,0.8)", 0.78, "rgba(249,115,22,0.9)", 1, "rgba(239,68,68,1)",
+                ],
+              } as never
+            }
+          />
+        </Source>
+      )}
+
       {/* Nearby Photo Walk: radius ring + numbered stops */}
       {ringData && (
         <Source id="walk-ring" type="geojson" data={ringData}>
@@ -215,7 +455,7 @@ export default function MapView({ photos, mapStyle, route }: Props) {
         </>
       )}
 
-      {/* Light direction around the open pin */}
+      {/* Light direction around the open pin: follows the carousel to each photo's exact EXIF coordinates */}
       {selected && !busy && <SunCompass photo={selected} zoom={zoom} />}
       <GeolocateControl position="bottom-right" />
 
@@ -229,45 +469,33 @@ export default function MapView({ photos, mapStyle, route }: Props) {
         </Source>
       )}
 
-      {!pickMode && clusters.map((c) =>
-        c.kind === "cluster" ? (
-          <ClusterPin
-            key={`c-${c.id}`}
-            longitude={c.longitude}
-            latitude={c.latitude}
-            count={c.count}
-            preview={c.preview}
-            dimmed={Boolean(gpsEdit)}
-            onClick={() => map?.flyTo({ center: [c.longitude, c.latitude], zoom: c.expansionZoom, duration: 900, essential: true })}
-          />
-        ) : (
-          (() => {
-            // A selected / hovered stack member is shown on top of its pile
-            const top = c.stack.find((p) => p.id === selectedId) ?? c.stack.find((p) => p.id === hoveredId) ?? c.photo;
-            const multi = c.stack.length > 1;
-            const pos = multi && c.stack.some((p) => p.id === selectedId) ? c.stack.indexOf(top) + 1 : undefined;
-            // While editing, the edited photo is drawn by the draggable marker instead
-            const stackLeft = gpsEdit ? c.stack.filter((p) => p.id !== gpsEdit.photoId) : c.stack;
-            if (!stackLeft.length) return null;
-            const shown = stackLeft.includes(top) ? top : stackLeft[0];
-            return (
-              <PhotoPin
-                key={`s-${c.photo.id}`}
-                photo={shown}
-                count={stackLeft.length > 1 ? stackLeft.length : imageCount(stackLeft)}
-                position={gpsEdit ? undefined : pos}
-                highlighted={!gpsEdit && c.stack.some((p) => p.id === hoveredId)}
-                selected={!gpsEdit && c.stack.some((p) => p.id === selectedId)}
-                dimmed={Boolean(gpsEdit)}
-                onHover={setHovered}
-                onSelect={select}
-              />
-            );
-          })()
-        ),
+      {/* Filtered photos in EXIF time order */}
+      {timelineData && (
+        <Source id="photo-timeline" type="geojson" data={timelineData}>
+          <Layer id="photo-timeline-line" type="line" layout={{ "line-cap": "round", "line-join": "round" }}
+            paint={{ "line-color": "#7dd3fc", "line-width": 1.8, "line-opacity": 0.8, "line-dasharray": [2, 2.5] }} />
+        </Source>
       )}
 
-      {/* hover מהגלריה על תמונה שנמצאת בתוך cluster → טבעת פועמת במיקום המדויק */}
+      <TripLayer />
+
+      {markersVisible && items.map(renderItem)}
+
+      {/* Compact hover preview of a dot: cover thumbnail + place name + photo count */}
+      {dotHover && !selected && !busy && (
+        <Marker longitude={dotHover.longitude} latitude={dotHover.latitude} anchor="bottom" offset={[0, -18]} style={{ zIndex: 25, pointerEvents: "none" }}>
+          <span className="flex w-44 items-center gap-2 rounded-xl bg-neutral-950/95 p-1.5 text-white shadow-2xl ring-1 ring-white/15">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={dotHover.pin.thumb_url ?? dotHover.pin.photo_url} alt="" className="h-11 w-11 shrink-0 rounded-lg object-cover" />
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-semibold" dir="auto">{dotHover.pin.location_name ?? dotHover.pin.title ?? "Photo spot"}</span>
+              <span className="block text-[11px] text-amber-300">{dotHover.count} photo{dotHover.count === 1 ? "" : "s"}</span>
+            </span>
+          </span>
+        </Marker>
+      )}
+
+      {/* hover מהגלריה על תמונה → טבעת פועמת במיקום המדויק */}
       {hovered && !busy && (
         <Marker longitude={hovered.longitude} latitude={hovered.latitude} anchor="center" style={{ zIndex: 30, pointerEvents: "none" }}>
           <span className="relative block h-6 w-6">
@@ -277,8 +505,20 @@ export default function MapView({ photos, mapStyle, route }: Props) {
         </Marker>
       )}
 
+      {/* The photo shown in the card: a highlighted pin at its exact EXIF coordinates */}
+      {selected && !busy && (
+        <Marker longitude={selected.longitude} latitude={selected.latitude} anchor="center" style={{ zIndex: 31, pointerEvents: "none" }}>
+          <span className="relative block h-5 w-5">
+            <span className="absolute inset-0 animate-ping rounded-full bg-amber-300/60" />
+            <span className="absolute inset-0.5 rounded-full border-2 border-white bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.9)]" />
+          </span>
+        </Marker>
+      )}
+
       {/* במובייל הכרטיסייה היא Drawer (מרונדר ב-page) */}
-      {selected && !busy && isDesktop && <PhotoPopup photo={selected} stack={selectedStack} onClose={() => select(null)} />}
+      {selected && !busy && isDesktop && (
+        <PhotoPopup photo={selected} stack={stack} onClose={() => select(null)} maxHeight={cardMax} onHeight={setCardH} />
+      )}
 
       {/* Edit GPS: original spot (ghost) + the photo as a draggable pin */}
       {gpsEdit && editing && (

@@ -2,12 +2,15 @@
 
 import { memo } from "react";
 import { Marker } from "react-map-gl";
-import type { Photo } from "@/types/photo";
+import type { Pin } from "@/lib/pins";
 import { getTimeOfDay } from "@/lib/timeOfDay";
 import TimeIcon from "./TimeIcon";
 
 interface Props {
-  photo: Photo;
+  photo: Pin;
+  /** Pin position when it differs from the photo (grouped pins sit at the group centre) */
+  longitude?: number;
+  latitude?: number;
   /** Photos/images in this pin (1 = a plain pin) */
   count?: number;
   /** Shown in the badge: "+2" or "2/3" when a stack member is selected */
@@ -21,7 +24,7 @@ interface Props {
 }
 
 /** Story Pin: thumbnail frame + tail + time-of-day badge; a card pile behind it when the pin holds several photos */
-function PhotoPin({ photo, count = 1, position, highlighted, selected, dimmed, onHover, onSelect }: Props) {
+function PhotoPin({ photo, longitude, latitude, count = 1, position, highlighted, selected, dimmed, onHover, onSelect }: Props) {
   const tod = getTimeOfDay(photo.taken_at, photo.latitude, photo.longitude);
   const active = highlighted || selected;
   const many = count > 1;
@@ -29,8 +32,8 @@ function PhotoPin({ photo, count = 1, position, highlighted, selected, dimmed, o
 
   return (
     <Marker
-      longitude={photo.longitude}
-      latitude={photo.latitude}
+      longitude={longitude ?? photo.longitude}
+      latitude={latitude ?? photo.latitude}
       anchor="bottom"
       style={{ zIndex: active ? 20 : 1, opacity: dimmed ? 0.35 : 1, pointerEvents: dimmed ? "none" : undefined }}
       onClick={(e) => {

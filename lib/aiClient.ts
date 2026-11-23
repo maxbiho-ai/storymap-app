@@ -84,3 +84,19 @@ export async function extractFieldNotes(texts: string[]): Promise<FieldNotes[]> 
     return none;
   }
 }
+
+export interface ScoutSpotDto {
+  name: string;
+  latitude: number;
+  longitude: number;
+  phase: "sunrise" | "sunset" | "midday";
+  reason: string | null;
+}
+
+/** AI photo scout for one day of a planned trip. Throws an Error with a readable message on failure */
+export async function suggestPhotoSpots(date: string, stops: { name: string; latitude: number; longitude: number }[]): Promise<ScoutSpotDto[]> {
+  const res = await fetch("/api/ai/photo-spots", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ date, stops }) });
+  const data = (await res.json().catch(() => ({}))) as { spots?: ScoutSpotDto[]; error?: string };
+  if (!res.ok) throw new Error(data.error ?? "AI suggestions are unavailable right now");
+  return Array.isArray(data.spots) ? data.spots : [];
+}

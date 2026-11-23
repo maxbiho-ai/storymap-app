@@ -10,7 +10,7 @@ export default function PhotoDrawer({ photo, stack, onClose }: { photo: Photo; s
   const [dragY, setDragY] = useState(0);
 
   return (
-    <div className="absolute inset-x-0 bottom-0 z-40 md:hidden">
+    <div data-photo-drawer className="absolute inset-x-0 bottom-0 z-40 md:hidden">
       <div
         className="mx-2 mb-2 max-h-[85dvh] overflow-y-auto rounded-3xl shadow-2xl transition-transform duration-150"
         style={{ transform: `translateY(${dragY}px)` }}

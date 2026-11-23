@@ -11,14 +11,20 @@ import AuthButton from "@/components/auth/AuthButton";
 import AuthModal from "@/components/auth/AuthModal";
 import { useAuth } from "@/hooks/useAuth";
 import { getSupabase } from "@/lib/supabase/client";
-import { usePhotoSearch, escapeLike } from "@/hooks/usePhotoSearch";
-import { useMapStore, padBounds } from "@/store/mapStore";
-import { stackOf } from "@/hooks/useClusters";
+import { escapeLike } from "@/hooks/usePhotoSearch";
+import { usePins } from "@/hooks/usePins";
+import { useFullPhotos } from "@/hooks/useFullPhotos";
+import { useMapStore } from "@/store/mapStore";
+import { boundsOf, groupPins, summarizePlaces, timelineCoords, toPin, type Pin } from "@/lib/pins";
 import { MAP_ID } from "@/components/map/constants";
 import ListsMenu from "@/components/social/ListsMenu";
 import GearFilters from "@/components/map/GearFilters";
 import NearbyWalkPanel from "@/components/map/NearbyWalkPanel";
-import { lensOptions, matchesGear, gearCount } from "@/lib/gear";
+import MapToolbar from "@/components/map/MapToolbar";
+import TripPlanner from "@/components/trip/TripPlanner";
+import { useTripStore } from "@/store/tripStore";
+import { useIsDesktop } from "@/hooks/useIsDesktop";
+import { lensOptions, matchesGear, gearCount, EMPTY_GEAR } from "@/lib/gear";
 import NotificationsBell, { type AppNotification } from "@/components/social/NotificationsBell";
 import { useSocialStore } from "@/store/socialStore";
 import { useCollectionPhotos, googleMapsRouteUrl, GOOGLE_MAPS_MAX_STOPS } from "@/hooks/useCollectionPhotos";
@@ -50,21 +56,30 @@ function StoryMap() {
   const filters = useMapStore((s) => s.filters);
   const setFilters = useMapStore((s) => s.setFilters);
   const setPhotographer = useMapStore((s) => s.setPhotographer);
-  const bounds = useMapStore((s) => s.bounds);
   const pickMode = useMapStore((s) => s.pickMode);
   const pickedLocation = useMapStore((s) => s.pickedLocation);
   const startPick = useMapStore((s) => s.startPick);
   const setPicked = useMapStore((s) => s.setPicked);
   const select = useMapStore((s) => s.select);
   const selectedId = useMapStore((s) => s.selectedId);
+  const carouselIds = useMapStore((s) => s.carouselIds);
+  const countryFilter = useMapStore((s) => s.countryFilter);
+  const setCountryFilter = useMapStore((s) => s.setCountryFilter);
+  const spotFilter = useMapStore((s) => s.spotFilter);
+  const setSpotFilter = useMapStore((s) => s.setSpotFilter);
+  const exactGps = useMapStore((s) => s.exactGps);
+  const showTimeline = useMapStore((s) => s.showTimeline);
+  const isDesktop = useIsDesktop();
+  const tripOpen = useTripStore((s) => s.open);
+  const setTripOpen = useTripStore((s) => s.setOpen);
 
-  // Filters (text / #tags / @photographer / place) + the visible area (padded) → one query.
-  // A searched place brings its own bbox, so panning doesn't re-query.
-  const query = useMemo<PhotoFilters>(
-    () => ({ ...filters, bounds: bounds && !filters.area ? padBounds(bounds) : undefined }),
-    [filters, bounds],
+  // The global pin layer: every photo matching the search (text / #tags / @photographer / place), whatever the
+  // viewport and whatever the sidebar shows. Panning never re-queries.
+  const dbFilters = useMemo(
+    () => ({ query: filters.query, tags: filters.tags, photographer: filters.photographer, area: filters.area }),
+    [filters],
   );
-  const { photos: loaded, loading, error, refresh } = usePhotoSearch(query);
+  const { pins: loadedPins, loading, error, refresh } = usePins(dbFilters);
   // Owner edits (location name / GPS) apply at once, before the next query returns them
   const edits = useMapStore((s) => s.edits);
   const deleted = useMapStore((s) => s.deleted);
@@ -75,32 +90,117 @@ function StoryMap() {
   const listVersion = useSocialStore((s) => s.version);
   const { photos: listPhotos, loading: listLoading } = useCollectionPhotos(activeCollection?.id ?? null, listVersion);
 
-  // Lens / lighting / long-exposure filters apply to the loaded pins
+  // Lens / lighting / long-exposure filters apply to the pins
   const gear = useMapStore((s) => s.gear);
   const walk = useMapStore((s) => s.walk);
   const walkStops = useMapStore((s) => s.walkStops);
-  const lenses = useMemo(() => lensOptions(activeCollection ? listPhotos : loaded), [activeCollection, listPhotos, loaded]);
+  const lenses = useMemo(() => lensOptions(activeCollection ? listPhotos : loadedPins), [activeCollection, listPhotos, loadedPins]);
 
-  const photos = useMemo(() => {
-    let base = activeCollection ? filterLocally(listPhotos, filters) : loaded;
+  // Pins before the country / spot filters: feeds the country layer and the destinations list
+  const pinsBase = useMemo(() => {
+    let base: Pin[] = activeCollection ? filterLocally(listPhotos, filters).map(toPin) : loadedPins;
     if (gearCount(gear)) base = base.filter((p) => matchesGear(p, gear));
     // A Nearby Photo Walk always shows its origin and stops, wherever the viewport is
     if (walk) {
       const have = new Set(base.map((p) => p.id));
-      base = [...base, ...[walk.origin, ...walkStops].filter((p) => !have.has(p.id))];
+      base = [...base, ...[walk.origin, ...walkStops].filter((p) => !have.has(p.id)).map(toPin)];
     }
     if (Object.keys(deleted).length) base = base.filter((p) => !deleted[p.id]);
-    return Object.keys(edits).length ? base.map((p) => (edits[p.id] ? { ...p, ...edits[p.id] } : p)) : base;
-  }, [activeCollection, listPhotos, loaded, filters, gear, walk, walkStops, edits, deleted]);
+    return Object.keys(edits).length ? base.map((p) => (edits[p.id] ? toPin({ ...p, ...edits[p.id] }) : p)) : base;
+  }, [activeCollection, listPhotos, loadedPins, filters, gear, walk, walkStops, edits, deleted]);
+
+  const pins = useMemo(() => {
+    if (!countryFilter && !spotFilter) return pinsBase;
+    return pinsBase.filter((p) => (!countryFilter || p.country === countryFilter) && (!spotFilter || p.location_name?.trim() === spotFilter));
+  }, [pinsBase, countryFilter, spotFilter]);
+  const groups = useMemo(() => groupPins(pins, exactGps), [pins, exactGps]);
+  const countryCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const p of pinsBase) if (p.country) m.set(p.country, (m.get(p.country) ?? 0) + 1);
+    return m;
+  }, [pinsBase]);
+
+  // Sidebar: destinations until something filters, then the photo grid (newest 500)
+  const filtersActive = Boolean(
+    filters.query.trim() || filters.tags.length || filters.photographer || filters.area || countryFilter || spotFilter || gearCount(gear) || activeCollection,
+  );
+  const summary = useMemo(() => (filtersActive ? [] : summarizePlaces(pinsBase)), [filtersActive, pinsBase]);
+  const gridPins = useMemo(
+    () => (filtersActive ? [...pins].sort((a, b) => (b.ts ?? -Infinity) - (a.ts ?? -Infinity)).slice(0, 500) : []),
+    [filtersActive, pins],
+  );
+  const timeline = useMemo(
+    () => (showTimeline && filtersActive && pins.length > 1 ? timelineCoords(pins) : undefined),
+    [showTimeline, filtersActive, pins],
+  );
+
   const route = useMemo<[number, number][] | undefined>(() => {
     if (walk) return [walk.origin, ...walkStops].map((p) => [p.longitude, p.latitude] as [number, number]);
-    return activeCollection ? photos.map((p) => [p.longitude, p.latitude] as [number, number]) : undefined;
-  }, [activeCollection, photos, walk, walkStops]);
-  const routeUrl = activeCollection ? googleMapsRouteUrl(photos) : null;
+    return activeCollection ? pins.map((p) => [p.longitude, p.latitude] as [number, number]) : undefined;
+  }, [activeCollection, pins, walk, walkStops]);
+  const routeUrl = activeCollection ? googleMapsRouteUrl(pins) : null;
   const gpsEdit = useMapStore((s) => s.gpsEdit);
   const setCurrentUser = useMapStore((s) => s.setCurrentUser);
-  const selectedPhoto = selectedId ? photos.find((p) => p.id === selectedId) : undefined;
-  const selectedStack = useMemo(() => (selectedPhoto ? stackOf(photos, selectedPhoto) : []), [photos, selectedPhoto]);
+
+  // The open card: the pin's spot (or the clicked cluster) as one carousel; full rows load on demand
+  const spot = useMemo(() => {
+    if (!selectedId) return { ids: [] as string[], members: null as Pin[] | null };
+    const byCarousel = Boolean(carouselIds && carouselIds.includes(selectedId));
+    const g = byCarousel ? undefined : groups.find((x) => x.members.some((m) => m.id === selectedId));
+    const ids = byCarousel ? carouselIds! : g ? g.members.map((m) => m.id) : [selectedId];
+    return { ids, members: g?.members ?? null };
+  }, [selectedId, carouselIds, groups]);
+  // Very large spots: load a window of 120 photos around the open one
+  const stackIds = useMemo(() => {
+    if (spot.ids.length <= 120) return spot.ids;
+    const i = Math.max(0, spot.ids.indexOf(selectedId ?? ""));
+    const from = Math.max(0, Math.min(i - 60, spot.ids.length - 120));
+    return spot.ids.slice(from, from + 120);
+  }, [spot.ids, selectedId]);
+  const fullPhotos = useFullPhotos(stackIds);
+  const selectedStack = useMemo(
+    () => fullPhotos.filter((p) => !deleted[p.id]).map((p) => (edits[p.id] ? { ...p, ...edits[p.id] } : p)),
+    [fullPhotos, edits, deleted],
+  );
+  const selectedPhoto = selectedId ? selectedStack.find((p) => p.id === selectedId) : undefined;
+  const openSpot = useMemo(
+    () => spot.members ?? (carouselIds && selectedId ? pins.filter((p) => carouselIds.includes(p.id)) : null),
+    [spot.members, carouselIds, selectedId, pins],
+  );
+
+  const fitAll = useCallback(() => {
+    const box = boundsOf(pins);
+    if (!map || !box) return;
+    if (box[0][0] === box[1][0] && box[0][1] === box[1][1]) map.flyTo({ center: box[0], zoom: 12, essential: true });
+    else map.fitBounds(box, { padding: { top: 130, bottom: 80, left: isDesktop ? 400 : 50, right: 60 }, maxZoom: 14, duration: 1400 });
+  }, [map, pins, isDesktop]);
+
+  const clearFilters = useCallback(() => {
+    setFilters(EMPTY_FILTERS);
+    setCountryFilter(null);
+    setSpotFilter(null);
+    useMapStore.getState().setGear(EMPTY_GEAR);
+    setActiveCollection(null);
+    select(null);
+  }, [setFilters, setCountryFilter, setSpotFilter, setActiveCollection, select]);
+
+  // A country / spot was picked: zoom to its pins (once per pick)
+  const fittedFilter = useRef<string | null>(null);
+  useEffect(() => {
+    const key = countryFilter ? `c:${countryFilter}` : spotFilter ? `s:${spotFilter}` : null;
+    if (!key) {
+      fittedFilter.current = null;
+      return;
+    }
+    if (!map || fittedFilter.current === key || !pins.length) return;
+    const box = boundsOf(pins);
+    if (!box) return;
+    fittedFilter.current = key;
+    const width = box[1][0] - box[0][0];
+    if (width > 200) map.flyTo({ center: [(box[0][0] + box[1][0]) / 2, (box[0][1] + box[1][1]) / 2], zoom: 3, duration: 1600, essential: true });
+    else if (box[0][0] === box[1][0] && box[0][1] === box[1][1]) map.flyTo({ center: box[0], zoom: 14, duration: 1400, essential: true });
+    else map.fitBounds(box, { padding: { top: 130, bottom: 80, left: isDesktop ? 400 : 50, right: 60 }, maxZoom: countryFilter ? 7 : 15, duration: 1600 });
+  }, [countryFilter, spotFilter, pins, map, isDesktop]);
 
   // Login / logout changes what RLS returns (private photos): reload
   const userId = user?.id ?? null;
@@ -148,7 +248,7 @@ function StoryMap() {
       .then(({ data }) => {
         if (!data) return;
         map.flyTo({ center: [data.longitude, data.latitude], zoom: 14, duration: 2500, essential: true });
-        select(data.id); // the card opens as soon as the pin loads with the new bounds
+        select(data.id); // the card opens once its full row loads
       });
   }, [map, select]);
 
@@ -199,12 +299,14 @@ function StoryMap() {
     (n: AppNotification) => {
       if (!n.photo) return;
       setFilters(EMPTY_FILTERS);
+      setCountryFilter(null);
+      setSpotFilter(null);
       setActiveCollection(null);
       select(n.photo.id);
       openComments(n.type === "like" ? null : n.photo.id);
       map?.flyTo({ center: [n.photo.longitude, n.photo.latitude], zoom: Math.max(map.getZoom(), 14), duration: 2000, essential: true });
     },
-    [map, select, setFilters, setActiveCollection, openComments],
+    [map, select, setFilters, setCountryFilter, setSpotFilter, setActiveCollection, openComments],
   );
 
   // Photographer filter → zoom out to everything they shot
@@ -239,7 +341,17 @@ function StoryMap() {
       setAuthOpen(true);
       return;
     }
+    setTripOpen(false);
     setUploadOpen((o) => !o);
+  };
+
+  const toggleTrip = () => {
+    if (!tripOpen) {
+      setUploadOpen(false);
+      useMapStore.getState().endWalk();
+      select(null);
+    }
+    setTripOpen(!tripOpen);
   };
 
   const onUploaded = useCallback(
@@ -282,7 +394,7 @@ function StoryMap() {
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-neutral-950">
       <div className="absolute inset-0">
-        <MapView photos={photos} route={route} />
+        <MapView pins={pins} groups={groups} selected={selectedPhoto} stack={selectedStack} countryCounts={countryCounts} route={route} timeline={timeline} />
       </div>
 
       {/* Top bar */}
@@ -291,43 +403,79 @@ function StoryMap() {
           <span className="text-sm font-black tracking-[0.25em] text-white">STORY<span className="text-amber-300">MAP</span></span>
         </div>
         <div className="pointer-events-auto min-w-0 flex-1">
-          <PhotoSearchBar value={filters} onChange={setFilters} resultCount={photos.length} loading={activeCollection ? listLoading : loading} />
+          <PhotoSearchBar value={filters} onChange={setFilters} resultCount={pins.length} loading={activeCollection ? listLoading : loading} />
           <div className="mt-0.5">
             <GearFilters lenses={lenses} />
           </div>
           {activeCollection && (
             <div className="mt-1 flex max-w-xl flex-wrap items-center gap-2 rounded-2xl bg-neutral-950/85 px-3 py-2 text-xs text-neutral-200 shadow-lg backdrop-blur">
               <span className="font-semibold text-amber-300" dir="auto">🧭 {activeCollection.name}</span>
-              <span className="text-neutral-400">{photos.length} stop{photos.length === 1 ? "" : "s"}</span>
+              <span className="text-neutral-400">{pins.length} stop{pins.length === 1 ? "" : "s"}</span>
               {routeUrl && (
                 <a
                   href={routeUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  title={photos.length > GOOGLE_MAPS_MAX_STOPS ? `Google Maps takes the first ${GOOGLE_MAPS_MAX_STOPS} stops` : "Directions through every pin"}
+                  title={pins.length > GOOGLE_MAPS_MAX_STOPS ? `Google Maps takes the first ${GOOGLE_MAPS_MAX_STOPS} stops` : "Directions through every pin"}
                   className="rounded-full bg-amber-300 px-2.5 py-1 font-semibold text-neutral-900 hover:bg-amber-200"
                 >
-                  Open Route in Google Maps{photos.length > GOOGLE_MAPS_MAX_STOPS ? ` (first ${GOOGLE_MAPS_MAX_STOPS})` : ""}
+                  Open Route in Google Maps{pins.length > GOOGLE_MAPS_MAX_STOPS ? ` (first ${GOOGLE_MAPS_MAX_STOPS})` : ""}
                 </a>
               )}
-              {!listLoading && !photos.length && <span className="text-neutral-400">Empty list: save pins with the bookmark button.</span>}
+              {!listLoading && !pins.length && <span className="text-neutral-400">Empty list: save pins with the bookmark button.</span>}
               <button type="button" onClick={() => setActiveCollection(null)} className="ml-auto rounded-full bg-white/10 px-2 py-0.5 hover:bg-white/20">
                 Show all ×
               </button>
             </div>
           )}
-          {filters.photographer && (
-            <button
-              type="button"
-              onClick={() => setPhotographer(null)}
-              className="mt-1 inline-flex items-center gap-2 rounded-full bg-amber-300 px-3 py-1 text-xs font-semibold text-neutral-900 shadow-lg hover:bg-amber-200"
-            >
-              Showing only {filters.photographer}
-              <span className="rounded-full bg-neutral-900/10 px-1.5">Show all ×</span>
-            </button>
-          )}
+          <div className="flex flex-wrap gap-1">
+            {filters.photographer && (
+              <button
+                type="button"
+                onClick={() => setPhotographer(null)}
+                className="mt-1 inline-flex items-center gap-2 rounded-full bg-amber-300 px-3 py-1 text-xs font-semibold text-neutral-900 shadow-lg hover:bg-amber-200"
+              >
+                Showing only {filters.photographer}
+                <span className="rounded-full bg-neutral-900/10 px-1.5">Show all ×</span>
+              </button>
+            )}
+            {countryFilter && (
+              <button
+                type="button"
+                onClick={() => setCountryFilter(null)}
+                aria-label={`Clear country filter ${countryFilter}`}
+                className="mt-1 inline-flex items-center gap-2 rounded-full bg-amber-300 px-3 py-1 text-xs font-semibold text-neutral-900 shadow-lg hover:bg-amber-200"
+              >
+                🌍 {countryFilter} · {pins.length.toLocaleString()}
+                <span className="rounded-full bg-neutral-900/10 px-1.5">Reset ×</span>
+              </button>
+            )}
+            {spotFilter && (
+              <button
+                type="button"
+                onClick={() => setSpotFilter(null)}
+                aria-label={`Clear place filter ${spotFilter}`}
+                className="mt-1 inline-flex max-w-full items-center gap-2 rounded-full bg-amber-300 px-3 py-1 text-xs font-semibold text-neutral-900 shadow-lg hover:bg-amber-200"
+              >
+                <span className="truncate" dir="auto">📍 {spotFilter}</span>
+                <span className="shrink-0 rounded-full bg-neutral-900/10 px-1.5">Reset ×</span>
+              </button>
+            )}
+          </div>
           {error && <p className="mt-1 rounded-lg bg-red-950/80 px-3 py-1 text-xs text-red-200">{error}</p>}
         </div>
+        <button
+          type="button"
+          onClick={toggleTrip}
+          aria-pressed={tripOpen}
+          className={`pointer-events-auto flex h-11 shrink-0 items-center gap-2 rounded-2xl px-3 text-sm font-semibold shadow-lg transition sm:px-4 ${
+            tripOpen ? "bg-white text-neutral-900 hover:bg-neutral-200" : "bg-neutral-950/85 text-white ring-1 ring-amber-300/60 backdrop-blur hover:bg-neutral-800"
+          }`}
+        >
+          <span aria-hidden>🧭</span>
+          <span className="hidden lg:inline">Plan a Photo Trip</span>
+          <span className="lg:hidden">Plan</span>
+        </button>
         <button
           type="button"
           onClick={toggleUpload}
@@ -345,8 +493,19 @@ function StoryMap() {
         </div>
       </header>
 
-      <FloatingGallery photos={photos} loading={loading} />
+      <MapToolbar onFitAll={fitAll} disabled={pickMode || Boolean(gpsEdit)} />
+      <FloatingGallery
+        gridPins={gridPins}
+        matchCount={pins.length}
+        summary={summary}
+        totalPins={pinsBase.length}
+        filtersActive={filtersActive}
+        openSpot={openSpot}
+        loading={loading}
+        onClearFilters={clearFilters}
+      />
       {walk && !pickMode && !gpsEdit && <NearbyWalkPanel />}
+      {!pickMode && !gpsEdit && <TripPlanner user={user} onRequireLogin={() => setAuthOpen(true)} />}
 
       {selectedPhoto && !pickMode && !gpsEdit && <PhotoDrawer photo={selectedPhoto} stack={selectedStack} onClose={() => select(null)} />}
 

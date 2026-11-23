@@ -1,10 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { getSupabase } from "@/lib/supabase/client";
-import type { Photo, PhotoFilters } from "@/types/photo";
-
-const MAX_RESULTS = 500;
+import type { PhotoFilters } from "@/types/photo";
 
 /** Escapes ILIKE wildcards */
 export function escapeLike(s: string): string {
@@ -16,77 +14,40 @@ function escapeForOr(s: string): string {
   return escapeLike(s).replace(/[,()"]/g, " ").trim();
 }
 
+/** The filters that run in the database (the rest: country, spot, gear: apply to the loaded pins) */
+export type DbFilters = Pick<PhotoFilters, "query" | "tags" | "photographer" | "area">;
+
 /**
- * Loads photos for the current filters. RLS returns only public photos + my own.
+ * Applies the search filters to a `photos` query. RLS returns only public photos + my own.
  * - query:        location name / title (partial, case-insensitive) or an exact tag
  * - tags:         contains → the photo must have *all* selected tags
  * - photographer: exact name, case-insensitive
  * - area:         a geocoded place (country / region / city): pins inside its bbox
- * - bounds:       the visible map area (ignored while an area is set)
- * 300ms debounce, and stale responses are dropped.
  */
-export function usePhotoSearch(filters: PhotoFilters) {
-  const [photos, setPhotos] = useState<Photo[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
-  const reqId = useRef(0);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function applyPhotoFilters<Q extends Record<string, any>>(q: Q, filters: DbFilters): Q {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let out: any = q;
+  if (filters.tags.length) out = out.contains("tags", filters.tags);
+  if (filters.photographer) out = out.ilike("photographer_name", escapeLike(filters.photographer.trim()));
 
-  const key = JSON.stringify(filters) + nonce;
+  const text = escapeForOr(filters.query);
+  if (text) {
+    const tagGuess = text.toLowerCase().replace(/\s+/g, "");
+    out = out.or(
+      [`location_name.ilike.%${text}%`, `title.ilike.%${text}%`, tagGuess && `tags.cs.{${tagGuess}}`]
+        .filter(Boolean)
+        .join(","),
+    );
+  }
 
-  useEffect(() => {
-    const id = ++reqId.current;
-    const timer = setTimeout(async () => {
-      setLoading(true);
-      setError(null);
-
-      let q = getSupabase()
-        .from("photos")
-        .select("*")
-        .order("taken_at", { ascending: false, nullsFirst: false })
-        .limit(MAX_RESULTS);
-
-      if (filters.tags.length) q = q.contains("tags", filters.tags);
-      if (filters.photographer) q = q.ilike("photographer_name", escapeLike(filters.photographer.trim()));
-
-      const text = escapeForOr(filters.query);
-      if (text) {
-        const tagGuess = text.toLowerCase().replace(/\s+/g, "");
-        q = q.or(
-          [`location_name.ilike.%${text}%`, `title.ilike.%${text}%`, tagGuess && `tags.cs.{${tagGuess}}`]
-            .filter(Boolean)
-            .join(","),
-        );
-      }
-
-      // A searched place (Germany, Frankfurt…) replaces the viewport: every pin inside its bbox
-      const box = filters.area
-        ? { west: filters.area.bbox[0], south: filters.area.bbox[1], east: filters.area.bbox[2], north: filters.area.bbox[3] }
-        : filters.bounds;
-      if (box) {
-        const { north, south, east, west } = box;
-        q = q.gte("latitude", south).lte("latitude", north);
-        // Map crossing the date line (west > east)
-        q = west <= east
-          ? q.gte("longitude", west).lte("longitude", east)
-          : q.or(`longitude.gte.${west},longitude.lte.${east}`);
-      }
-
-      const { data, error } = await q;
-      if (id !== reqId.current) return; // a newer request is on its way
-      if (error) setError(error.message);
-      else setPhotos((data ?? []) as Photo[]);
-      setLoading(false);
-    }, 300);
-
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
-
-  /** Reload (e.g. after an upload) */
-  const refresh = () => setNonce((n) => n + 1);
-
-  return { photos, loading, error, refresh };
+  if (filters.area) {
+    const [west, south, east, north] = filters.area.bbox;
+    out = out.gte("latitude", south).lte("latitude", north);
+    // Area crossing the date line (west > east)
+    out = west <= east ? out.gte("longitude", west).lte("longitude", east) : out.or(`longitude.gte.${west},longitude.lte.${east}`);
+  }
+  return out as Q;
 }
 
 /** Popular tags for autocomplete (view popular_tags) */

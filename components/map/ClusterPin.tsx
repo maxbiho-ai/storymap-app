@@ -2,13 +2,13 @@
 
 import { memo } from "react";
 import { Marker } from "react-map-gl";
-import type { Photo } from "@/types/photo";
+import type { Pin } from "@/lib/pins";
 
 interface Props {
   longitude: number;
   latitude: number;
   count: number;
-  preview: Photo[];
+  preview: Pin[];
   onClick: () => void;
   /** Edit-GPS mode: context only, not clickable */
   dimmed?: boolean;
@@ -32,7 +32,7 @@ function ClusterPin({ longitude, latitude, count, preview, onClick, dimmed }: Pr
     >
       <button
         type="button"
-        aria-label={`${count} photos, click to zoom in`}
+        aria-label={`${count} photos, click to browse`}
         className="relative cursor-pointer transition-transform hover:scale-110"
         style={{ width: size, height: size }}
       >
