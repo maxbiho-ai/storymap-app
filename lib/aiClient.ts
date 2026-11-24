@@ -101,6 +101,22 @@ export async function suggestPhotoSpots(date: string, stops: { name: string; lat
   return Array.isArray(data.spots) ? data.spots : [];
 }
 
+export interface AiSearchFilters {
+  /** Canonical English country name, or null */
+  country: string | null;
+  tags: string[];
+  lightPhase: "sunrise" | "sunset" | "blue" | "night" | null;
+  keywords: string[];
+}
+
+/** "✨ AI" search: a natural-language request in any language → structured StoryMap filters. Throws a readable Error on failure */
+export async function searchWithAi(prompt: string, knownTags: string[]): Promise<AiSearchFilters> {
+  const res = await fetch("/api/ai/search-filter", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ prompt, knownTags: knownTags.slice(0, 80) }) });
+  const data = (await res.json().catch(() => ({}))) as Partial<AiSearchFilters> & { error?: string };
+  if (!res.ok) throw new Error(data.error ?? "AI search is unavailable right now");
+  return { country: data.country ?? null, tags: data.tags ?? [], lightPhase: data.lightPhase ?? null, keywords: data.keywords ?? [] };
+}
+
 export interface AiTripRouteDto {
   title: string | null;
   startTime: string;

@@ -67,6 +67,7 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
   const photographer = useMapStore((s) => s.filters.photographer);
   const area = useMapStore((s) => s.filters.area);
   const [open, setOpen] = useState(true);
+  const sunAll = useMapStore((s) => s.sunAll);
   const destinationsOpen = useMapStore((s) => s.destinationsOpen);
   const setDestinationsOpen = useMapStore((s) => s.setDestinationsOpen);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -250,6 +251,7 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
             <ul className="grid grid-cols-3 gap-2 md:grid-cols-2">
               {photos.map((p) => {
                 const tod = phaseIcon(p.solar_phase);
+                const orient = p.width && p.height ? (p.width >= p.height ? (p.width === p.height ? null : "Landscape") : "Portrait") : null;
                 const active = hoveredId === p.id || selectedId === p.id;
                 return (
                   <li key={p.id}>
@@ -274,7 +276,12 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
                       <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-6 text-start text-[11px] leading-tight text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100">
                         {p.location_name ?? p.title ?? ""}
                       </span>
-                      {tod && <TimeIcon t={tod} size={18} className="absolute end-1.5 top-1.5" />}
+                      {orient && (
+                        <span className="absolute left-1.5 top-1.5 rounded bg-neutral-950/75 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none tracking-wider text-white ring-1 ring-white/20 backdrop-blur">
+                          {orient}
+                        </span>
+                      )}
+                      {sunAll && tod && <TimeIcon t={tod} size={18} className="absolute end-1.5 top-1.5" />}
                     </button>
                   </li>
                 );

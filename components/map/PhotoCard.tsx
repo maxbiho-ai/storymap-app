@@ -18,7 +18,7 @@ import LightPlanner from "./LightPlanner";
 import GpsInlineEditor from "./GpsInlineEditor";
 import ReportButton from "./ReportButton";
 import { streetViewUrl } from "@/lib/walk";
-import { contentLabPayload, contentLabUrl } from "@/lib/contentLab";
+import ContentLabRow from "./ContentLabRow";
 
 function exposureLine(p: Photo): string {
   return [
@@ -104,6 +104,8 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   const exactGps = useMapStore((s) => s.exactGps);
   const setExactGps = useMapStore((s) => s.setExactGps);
   const currentUserId = useMapStore((s) => s.currentUserId);
+  const sunPhoto = useMapStore((s) => s.sunPhoto);
+  const setSunPhoto = useMapStore((s) => s.setSunPhoto);
   const walk = useMapStore((s) => s.walk);
   const startWalk = useMapStore((s) => s.startWalk);
   const endWalk = useMapStore((s) => s.endWalk);
@@ -140,7 +142,6 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   const [infoOpen, setInfoOpen] = useState(false);
   const [tipBelow, setTipBelow] = useState(false);
   const [copied, setCopied] = useState<"loc" | "gps" | null>(null);
-  const [labMsg, setLabMsg] = useState<string | null>(null);
   const [editLoc, setEditLoc] = useState(false);
   const [editGps, setEditGps] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -174,17 +175,6 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
       pendingIdx.current = s.i;
       select(s.photoId);
     }
-  };
-
-  /** Hand the photo to Content Lab through the URL, and keep a JSON copy on the clipboard as a fallback */
-  const sendToContentLab = () => {
-    const payload = contentLabPayload(photo, images[Math.min(idx, images.length - 1)] ?? photo.photo_url);
-    window.open(contentLabUrl(payload), "_blank", "noopener,noreferrer"); // synchronously, inside the click, so it is not popup-blocked
-    const done = (ok: boolean) => {
-      setLabMsg(ok ? "Opened Content Lab. A JSON copy is on your clipboard in case the link is not picked up." : "Opened Content Lab (the browser blocked the JSON clipboard copy).");
-      setTimeout(() => setLabMsg(null), 5000);
-    };
-    navigator.clipboard?.writeText(JSON.stringify(payload, null, 2)).then(() => done(true), () => done(false)) ?? done(false);
   };
 
   const copy = async (what: "loc" | "gps", text: string) => {
@@ -394,10 +384,21 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
         )}
 
         {when && (
-          <p className="flex items-center gap-1.5 text-xs text-neutral-400">
+          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-neutral-400">
             {tod && <TimeIcon t={tod} size={16} />}
             {when}
             {solar && <span className="text-neutral-500">· {solarPhaseLabel(solar)}</span>}
+            {photo.taken_at && (
+              <button
+                type="button"
+                onClick={() => setSunPhoto(!sunPhoto)}
+                aria-pressed={sunPhoto}
+                title="Draw the sun direction at capture time on the map"
+                className={`ms-auto rounded-full px-2 py-0.5 text-[11px] font-semibold transition max-md:min-h-8 ${sunPhoto ? "bg-amber-300 text-neutral-900" : "bg-white/10 text-neutral-200 hover:bg-white/15"}`}
+              >
+                ☀ Show Sun Direction
+              </button>
+            )}
           </p>
         )}
 
@@ -428,15 +429,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
           🥾 {walking ? "End Nearby Photo Walk" : "Nearby Photo Walk · what else within 30 min?"}
         </button>
 
-        <button
-          type="button"
-          onClick={sendToContentLab}
-          title="Open this photo in Content Lab's Content Playbook, with its location, light, camera data and photographer credit"
-          className="!mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl bg-violet-400/90 px-3 py-2 text-xs font-semibold text-neutral-950 transition hover:bg-violet-300 max-md:min-h-11"
-        >
-          ✨ → Send to Content Playbook
-        </button>
-        {labMsg && <p role="status" className="rounded-lg bg-emerald-950/70 px-3 py-1.5 text-[11px] text-emerald-200">{labMsg}</p>}
+        <ContentLabRow photo={photo} imageUrl={images[Math.min(idx, images.length - 1)] ?? photo.photo_url} />
 
         {!isOwner && <ReportButton photoId={photo.id} />}
 

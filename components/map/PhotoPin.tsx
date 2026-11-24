@@ -4,6 +4,7 @@ import { memo } from "react";
 import { Marker } from "react-map-gl";
 import type { Pin } from "@/lib/pins";
 import { getTimeOfDay } from "@/lib/timeOfDay";
+import { useMapStore } from "@/store/mapStore";
 import TimeIcon from "./TimeIcon";
 
 interface Props {
@@ -25,6 +26,7 @@ interface Props {
 
 /** Story Pin: thumbnail frame + tail + time-of-day badge; a card pile behind it when the pin holds several photos */
 function PhotoPin({ photo, longitude, latitude, count = 1, position, highlighted, selected, dimmed, onHover, onSelect }: Props) {
+  const sunAll = useMapStore((s) => s.sunAll);
   const tod = getTimeOfDay(photo.taken_at, photo.latitude, photo.longitude);
   const active = highlighted || selected;
   const many = count > 1;
@@ -67,7 +69,7 @@ function PhotoPin({ photo, longitude, latitude, count = 1, position, highlighted
         </span>
         {/* Tail */}
         <span className={`-mt-1 h-2.5 w-2.5 rotate-45 ${active ? "bg-amber-300" : "bg-white"} shadow`} />
-        {tod && <TimeIcon t={tod} size={20} className="absolute -top-2 -end-2" />}
+        {sunAll && tod && <TimeIcon t={tod} size={20} className="absolute -top-2 -end-2" />}
         {many && (
           <span className="absolute -start-2.5 -top-2 z-10 flex h-5 min-w-[22px] items-center justify-center gap-0.5 rounded-full bg-neutral-950 px-1.5 text-[10px] font-bold leading-none text-white shadow ring-2 ring-white">
             <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">

@@ -36,6 +36,8 @@ function MobileControls({ onFitAll, destinationsLabel }: { onFitAll: () => void;
   const setExactGps = useMapStore((s) => s.setExactGps);
   const countriesOn = useMapStore((s) => s.countriesOn);
   const setCountriesOn = useMapStore((s) => s.setCountriesOn);
+  const sunAll = useMapStore((s) => s.sunAll);
+  const setSunAll = useMapStore((s) => s.setSunAll);
   const destinationsOpen = useMapStore((s) => s.destinationsOpen);
   const setDestinationsOpen = useMapStore((s) => s.setDestinationsOpen);
   const [more, setMore] = useState(false);
@@ -78,6 +80,7 @@ function MobileControls({ onFitAll, destinationsLabel }: { onFitAll: () => void;
           <div className="absolute bottom-full right-0 mb-2 w-60 overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/95 py-1 shadow-2xl backdrop-blur">
             <button type="button" onClick={() => setExactGps(!exactGps)} aria-pressed={exactGps} className={row(exactGps)}>◎ Spread Exact GPS <span>{exactGps ? "On" : "Off"}</span></button>
             <button type="button" onClick={() => setCountriesOn(!countriesOn)} aria-pressed={countriesOn} className={row(countriesOn)}>🌍 Countries <span>{countriesOn ? "On" : "Off"}</span></button>
+            <button type="button" onClick={() => setSunAll(!sunAll)} aria-pressed={sunAll} className={row(sunAll)}>☀ Show Sun Direction <span>{sunAll ? "On" : "Off"}</span></button>
             <button type="button" onClick={() => setMapMode(terrain ? "satellite" : "terrain")} aria-pressed={terrain} className={row(terrain)}>⛰ 3D terrain <span>{terrain ? "On" : "Off"}</span></button>
           </div>
         )}
@@ -95,6 +98,8 @@ export default function MapToolbar({ onFitAll, disabled, destinationsLabel = "De
 
   const countriesOn = useMapStore((s) => s.countriesOn);
   const setCountriesOn = useMapStore((s) => s.setCountriesOn);
+  const sunAll = useMapStore((s) => s.sunAll);
+  const setSunAll = useMapStore((s) => s.setSunAll);
 
   if (disabled) return null;
   return (
@@ -128,6 +133,15 @@ export default function MapToolbar({ onFitAll, disabled, destinationsLabel = "De
         className={`rounded-2xl px-3 py-2 text-xs font-semibold shadow-lg ring-1 ring-white/10 backdrop-blur transition ${countriesOn ? "bg-amber-300 text-neutral-900" : "bg-neutral-950/85 text-neutral-100 hover:bg-neutral-800"}`}
       >
         🌍 Countries
+      </button>
+      <button
+        type="button"
+        onClick={() => setSunAll(!sunAll)}
+        aria-pressed={sunAll}
+        title="Draw the sun direction at capture time on every visible pin"
+        className={`rounded-2xl px-3 py-2 text-xs font-semibold shadow-lg ring-1 ring-white/10 backdrop-blur transition ${sunAll ? "bg-amber-300 text-neutral-900" : "bg-neutral-950/85 text-neutral-100 hover:bg-neutral-800"}`}
+      >
+        ☀ Show Sun Direction
       </button>
       <button
         type="button"

@@ -259,6 +259,28 @@ function StoryMap() {
     select(null);
   }, [setFilters, setCountryFilter, setSpotFilter, setActiveCollection, select]);
 
+  // STORYMAP logo: back to the landing view, as after a clean refresh (filters, search, card, sun overlay, every pin in view)
+  const pendingReset = useRef(false);
+  const [resetTick, setResetTick] = useState(0);
+  const resetAll = useCallback(() => {
+    clearFilters();
+    const st = useMapStore.getState();
+    st.endWalk();
+    st.setSunAll(false);
+    st.setSunPhoto(false);
+    st.setExactGps(false);
+    st.setDestinationsOpen(false);
+    setTimeout(() => {
+      pendingReset.current = true;
+      setResetTick((t) => t + 1);
+    }, 450);
+  }, [clearFilters]);
+  useEffect(() => {
+    if (!pendingReset.current || loading || filtersActive) return;
+    pendingReset.current = false;
+    fitAll();
+  }, [resetTick, loading, filtersActive, fitAll]);
+
   // A country / spot was picked: zoom to its pins (once per pick)
   const fittedFilter = useRef<string | null>(null);
   useEffect(() => {
@@ -557,9 +579,9 @@ function StoryMap() {
       {/* Top bar */}
       {isDesktop && (
       <header className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start gap-3 p-3 md:p-4 ${pickMode || gpsEdit ? "opacity-0 [&_*]:!pointer-events-none" : ""}`}>
-        <div className="pointer-events-auto hidden shrink-0 rounded-2xl bg-neutral-950/80 px-4 py-2.5 shadow-lg backdrop-blur md:block">
+        <button type="button" onClick={resetAll} aria-label="StoryMap: reset to the full map" title="Reset the view" className="pointer-events-auto hidden shrink-0 rounded-2xl bg-neutral-950/80 px-4 py-2.5 shadow-lg backdrop-blur transition hover:bg-neutral-900 md:block">
           <span className="text-sm font-black tracking-[0.25em] text-white">STORY<span className="text-amber-300">MAP</span></span>
-        </div>
+        </button>
         <div className="pointer-events-auto min-w-0 flex-1">
           <PhotoSearchBar value={filters} onChange={setFilters} resultCount={pins.length} loading={activeCollection ? listLoading : loading} />
           <div className="mt-0.5">

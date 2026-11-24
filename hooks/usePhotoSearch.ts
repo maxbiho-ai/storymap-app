@@ -14,6 +14,9 @@ function escapeForOr(s: string): string {
   return escapeLike(s).replace(/[,()"]/g, " ").trim();
 }
 
+/** Words that name the same thing in place names (Iceland: "foss" is a waterfall) */
+const PLACE_SYNONYMS: Record<string, string[]> = { waterfall: ["foss", "falls"], glacier: ["jokull"], volcano: ["eldfjall"] };
+
 /** The filters that run in the database (the rest: country, spot, gear: apply to the loaded pins) */
 export type DbFilters = Pick<PhotoFilters, "query" | "tags" | "photographer" | "area">;
 
@@ -31,14 +34,11 @@ export function applyPhotoFilters<Q extends Record<string, any>>(q: Q, filters: 
   if (filters.tags.length) out = out.contains("tags", filters.tags);
   if (filters.photographer) out = out.ilike("photographer_name", escapeLike(filters.photographer.trim()));
 
-  const text = escapeForOr(filters.query);
-  if (text) {
-    const tagGuess = text.toLowerCase().replace(/\s+/g, "");
-    out = out.or(
-      [`location_name.ilike.%${text}%`, `title.ilike.%${text}%`, tagGuess && `tags.cs.{${tagGuess}}`]
-        .filter(Boolean)
-        .join(","),
-    );
+  // Every word must match somewhere (location, title or a tag): "waterfall foss" narrows, never widens. Plural and singular both count.
+  for (const word of escapeForOr(filters.query).toLowerCase().split(/\s+/).filter(Boolean)) {
+    const stem = word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word;
+    const forms = [...new Set([word, stem, ...(PLACE_SYNONYMS[stem] ?? [])])];
+    out = out.or(forms.flatMap((w) => [`location_name.ilike.%${w}%`, `title.ilike.%${w}%`, `tags.cs.{${w.replace(/[^a-z0-9_]/g, "")}}`]).join(","));
   }
 
   if (filters.area) {

@@ -43,6 +43,11 @@ interface MapState {
   viewMode: ViewMode;
   setViewMode: (m: ViewMode) => void;
   /** "Spread Exact GPS Spots": split groups into one sub-pin per exact GPS coordinate */
+  /** Sun direction: ray for the open photo only / for every visible pin. Both off by default */
+  sunPhoto: boolean;
+  setSunPhoto: (on: boolean) => void;
+  sunAll: boolean;
+  setSunAll: (on: boolean) => void;
   exactGps: boolean;
   setExactGps: (on: boolean) => void;
   /** Country picked on the map / in the sidebar (canonical name) */
@@ -136,9 +141,14 @@ export const useMapStore = create<MapState>((set) => ({
   setHovered: (hoveredId) => set({ hoveredId }),
 
   selectedId: null,
-  select: (selectedId) => set((s) => ({ selectedId, carouselIds: selectedId && s.carouselIds?.includes(selectedId) ? s.carouselIds : null })),
+  // The per-photo sun ray belongs to the open card: any other photo, or closing it, turns it off
+  select: (selectedId) => set((s) => ({ selectedId, sunPhoto: selectedId !== null && selectedId === s.selectedId ? s.sunPhoto : false, carouselIds: selectedId && s.carouselIds?.includes(selectedId) ? s.carouselIds : null })),
+  sunPhoto: false,
+  setSunPhoto: (sunPhoto) => set({ sunPhoto }),
+  sunAll: false,
+  setSunAll: (sunAll) => set({ sunAll }),
   carouselIds: null,
-  openCarousel: (ids) => set({ carouselIds: ids.length > 1 ? ids : null, selectedId: ids[0] ?? null }),
+  openCarousel: (ids) => set({ carouselIds: ids.length > 1 ? ids : null, selectedId: ids[0] ?? null, sunPhoto: false }),
 
   viewMode: "dots",
   setViewMode: (viewMode) => set({ viewMode }),

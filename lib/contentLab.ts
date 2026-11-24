@@ -4,8 +4,16 @@ import { resolveCountry } from "@/lib/countryGeo";
 
 export const CONTENT_LAB_URL = "https://content-lab-app.netlify.app/";
 
+export type ContentLabFolder = "past" | "evergreen" | "playbook";
+
 export interface ContentLabPayload {
   import_source: "storymap";
+  /** past / evergreen (owner only) or playbook (the Idea Bank, anyone) */
+  target_folder: ContentLabFolder;
+  /** Caption / description of the photo */
+  description: string | null;
+  /** Idea Bank: the user's own concept note */
+  idea_note: string | null;
   photo_id: string;
   image_url: string;
   title: string | null;
@@ -28,7 +36,7 @@ export interface ContentLabPayload {
 const clean = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null);
 
 /** Everything Content Lab's Content Playbook needs to ingest a photo and credit its photographer */
-export function contentLabPayload(photo: Photo, imageUrl: string): ContentLabPayload {
+export function contentLabPayload(photo: Photo, imageUrl: string, folder: ContentLabFolder, ideaNote?: string): ContentLabPayload {
   const solar = getSolarPhase(photo.taken_at, photo.latitude, photo.longitude);
   const camera = [photo.camera_make, photo.camera_model].filter(Boolean).join(" ").replace(/^(\w+)( CORPORATION| Corporation)? \1 /i, "$1 ");
   const exif = [
@@ -41,6 +49,9 @@ export function contentLabPayload(photo: Photo, imageUrl: string): ContentLabPay
     .join(" · ");
   return {
     import_source: "storymap",
+    target_folder: folder,
+    description: clean(photo.description ?? photo.story)?.slice(0, 1500) ?? null,
+    idea_note: clean(ideaNote),
     photo_id: photo.id,
     image_url: imageUrl,
     title: clean(photo.title),

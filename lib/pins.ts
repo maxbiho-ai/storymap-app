@@ -8,12 +8,12 @@ import type { Photo } from "@/types/photo";
  * The lightweight global pin layer: one small row per photo, for EVERY matching photo on the map
  * (the sidebar's 500-photo limit never applies to it). Full rows load on demand, only for open cards.
  */
-export const PIN_COLUMNS = "id, latitude, longitude, location_name, thumb_url, photo_url, taken_at, taken_tz, title, tags, lens, shutter_speed, image_urls";
+export const PIN_COLUMNS = "id, latitude, longitude, location_name, thumb_url, photo_url, taken_at, taken_tz, title, tags, lens, shutter_speed, image_urls, width, height";
 
 export type RawPin = Pick<
   Photo,
   "id" | "latitude" | "longitude" | "location_name" | "thumb_url" | "photo_url" | "taken_at" | "taken_tz" | "title" | "tags" | "lens" | "shutter_speed"
-> & { image_urls?: string[] | null };
+> & { image_urls?: string[] | null; width?: number | null; height?: number | null };
 
 /** Solar phase at capture: golden-hour sunrise / sunset, blue hour, night, or daytime */
 export type PinPhase = LightKey | "day";
@@ -24,6 +24,9 @@ export interface Pin extends RawPin {
   solar_phase: PinPhase | null;
   /** Only for pins holding several images (Social Planner posts): lets every count match the card's carousel */
   image_urls?: string[];
+  /** Pixel size (orientation badge) */
+  width?: number | null;
+  height?: number | null;
   /** taken_at as epoch ms (null when unknown) */
   ts: number | null;
 }
@@ -46,6 +49,8 @@ export function toPin(raw: RawPin): Pin {
     country: countryFromLocation(raw.location_name),
     solar_phase: lightKeyOf(raw),
     ts: Number.isNaN(ts) ? null : ts,
+    width: raw.width ?? null,
+    height: raw.height ?? null,
     ...(raw.image_urls && raw.image_urls.length > 1 ? { image_urls: raw.image_urls } : {}),
   };
 }

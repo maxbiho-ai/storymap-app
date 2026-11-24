@@ -95,3 +95,20 @@ export function boundaryNames(canonical: string): string[] {
   if (canonical === "Sao Tome and Principe") out.add("São Tomé and Príncipe");
   return [...out];
 }
+
+/**
+ * Pulls a country name out of free text: "iceland waterfall" / "waterfalls in Iceland" → { country: "Iceland", rest: "waterfall" }.
+ * Longest name wins ("United Kingdom" before "Kingdom"); filler words around it ("in", "of", "from") are dropped.
+ */
+export function splitCountry(text: string): { country: string | null; rest: string } {
+  const words = text.split(/\s+/).filter(Boolean);
+  for (let n = Math.min(4, words.length); n >= 1; n--) {
+    for (let i = 0; i + n <= words.length; i++) {
+      const c = canonicalCountry(words.slice(i, i + n).join(" ").replace(/[.,;:!?]+$/g, ""));
+      if (!c) continue;
+      const rest = [...words.slice(0, i), ...words.slice(i + n)].filter((w) => !/^(in|of|from|at|near|the|within|inside|around)$/i.test(w));
+      return { country: c, rest: rest.join(" ") };
+    }
+  }
+  return { country: null, rest: text };
+}

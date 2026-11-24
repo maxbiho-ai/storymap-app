@@ -14,6 +14,7 @@ import PhotoPopup from "./PhotoPopup";
 import PickModeBanner from "./PickModeBanner";
 import GpsEditBanner from "./GpsEditBanner";
 import SunCompass from "./SunCompass";
+import SunRays from "./SunRays";
 import MapStyleSwitcher from "./MapStyleSwitcher";
 import CountryLayer, { type CountryPill } from "./CountryLayer";
 import TripLayer from "@/components/trip/TripLayer";
@@ -95,10 +96,18 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
   const walk = useMapStore((s) => s.walk);
   const walkStops = useMapStore((s) => s.walkStops);
   const terrain = mapMode === "terrain";
+  const sunPhoto = useMapStore((s) => s.sunPhoto);
+  const sunAll = useMapStore((s) => s.sunAll);
 
   // זום שלם — לחישוב מחדש של ה-clusters *תוך כדי* זום, לא רק בסופו
   const [zoomLevel, setZoomLevel] = useState(2);
   const { items, leaves } = useClusters(groups, bounds, zoomLevel);
+
+  // Global sun rays: one per visible single pin (clusters are skipped)
+  const rayPoints = useMemo(
+    () => (sunAll ? items.flatMap((c) => (c.kind === "cluster" ? [] : [c.group.members[0]])) : []),
+    [sunAll, items],
+  );
 
   const pinById = useMemo(() => new globalThis.Map(pins.map((p) => [p.id, p])), [pins]);
   const hovered = hoveredId ? pinById.get(hoveredId) : undefined;
@@ -468,7 +477,8 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
       )}
 
       {/* Light direction around the open pin: follows the carousel to each photo's exact EXIF coordinates */}
-      {selected && !busy && <SunCompass photo={selected} zoom={zoom} />}
+      {selected && !busy && (sunPhoto || sunAll) && <SunCompass photo={selected} zoom={zoom} />}
+      {sunAll && !busy && <SunRays points={rayPoints} zoom={zoom} />}
       <GeolocateControl position="bottom-right" />
 
       {/* Trip list: a subtle dashed line through the saved pins, in list order */}

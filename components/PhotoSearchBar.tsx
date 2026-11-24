@@ -4,6 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { normalizeTag } from "@/lib/tags";
 import { geocodeAreas, areaLabel, kindLabel } from "@/lib/geocode";
 import { usePopularPhotographers, usePopularTags } from "@/hooks/usePhotoSearch";
+import { canonicalCountry, countryFromLocation, splitCountry } from "@/lib/countries";
+import { searchWithAi } from "@/lib/aiClient";
+import { EMPTY_GEAR, type LightKey } from "@/lib/gear";
+import { useMapStore } from "@/store/mapStore";
 import type { GeoArea, PhotoFilters } from "@/types/photo";
 
 type Filters = Omit<PhotoFilters, "bounds">;
@@ -54,6 +58,14 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading, 
   const [active, setActive] = useState(0);
   const [navigated, setNavigated] = useState(false);
   const [places, setPlaces] = useState<GeoArea[]>([]);
+  // "✨ AI" mode: the box takes a natural-language request (any language) and an endpoint turns it into filters
+  const [aiMode, setAiMode] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiNote, setAiNote] = useState<string | null>(null);
+  const countryFilter = useMapStore((s) => s.countryFilter);
+  const setCountryFilter = useMapStore((s) => s.setCountryFilter);
+  // A country typed in the box ("iceland waterfall") is the country scope; remember that we set it, so deleting the word lifts it
+  const autoCountry = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Keep the box in sync when the filters are reset from outside (notification click, Clear…)
@@ -62,7 +74,9 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading, 
     if (isEmpty) setDraft("");
   }, [isEmpty]);
 
-  const parsed = parseSearch(draft);
+  const raw = parseSearch(draft);
+  const split = aiMode ? { country: null, rest: raw.text } : splitCountry(raw.text);
+  const parsed = { ...raw, text: split.rest };
   const mode: "person" | "tag" | "place" =
     parsed.person !== null ? "person" : parsed.partialTag !== null || !draft.trim() ? "tag" : "place";
 
@@ -76,14 +90,23 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading, 
     const ctrl = new AbortController();
     const t = setTimeout(() => {
       geocodeAreas(placeQuery, ctrl.signal)
-        .then(setPlaces)
+        // With a country scope, only places inside that country are offered
+        .then((list) => setPlaces(countryFilter ? list.filter((a) => (a.kind === "country" ? canonicalCountry(a.name) : countryFromLocation(a.name)) === countryFilter) : list))
         .catch(() => {});
     }, 250);
     return () => {
       clearTimeout(t);
       ctrl.abort();
     };
-  }, [placeQuery]);
+  }, [placeQuery, countryFilter]);
+
+  // The box lost its country word, or the country filter was cleared elsewhere (logo, pill ×): keep both in step
+  useEffect(() => {
+    if (countryFilter === null && autoCountry.current) {
+      autoCountry.current = null;
+      setDraft((d) => splitCountry(parseSearch(d).text).rest);
+    }
+  }, [countryFilter]);
 
   const suggestions = useMemo<Suggestion[]>(() => {
     if (mode === "person") {
@@ -110,7 +133,16 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading, 
     setDraft(next);
     setActive(0);
     setNavigated(false);
-    const { text } = parseSearch(next);
+    if (aiMode) return;
+    const { text: full } = parseSearch(next);
+    const { country, rest: text } = splitCountry(full);
+    if (country) {
+      autoCountry.current = country;
+      if (country !== countryFilter) setCountryFilter(country);
+    } else if (autoCountry.current) {
+      autoCountry.current = null;
+      setCountryFilter(null);
+    }
     if (text !== value.query) onChange({ ...value, query: text });
   };
 
@@ -138,13 +170,42 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading, 
   const clearAll = () => {
     setDraft("");
     setPlaces([]);
+    setAiNote(null);
+    autoCountry.current = null;
+    setCountryFilter(null);
     onChange({ query: "", tags: [], photographer: null, area: null });
+  };
+
+  const runAi = async () => {
+    const prompt = draft.trim();
+    if (prompt.length < 2 || aiBusy) return;
+    if (!useMapStore.getState().currentUserId) return useMapStore.getState().requestLogin();
+    setAiBusy(true);
+    setAiNote(null);
+    try {
+      const f = await searchWithAi(prompt, popularTags.map((t) => t.tag));
+      const country = canonicalCountry(f.country);
+      const tags = [...new Set(f.tags.map(normalizeTag).filter(Boolean))];
+      const keywords = f.keywords.join(" ").trim();
+      autoCountry.current = null;
+      setCountryFilter(country);
+      const st = useMapStore.getState();
+      st.setGear({ ...EMPTY_GEAR, ...(f.lightPhase ? { light: [f.lightPhase as LightKey] } : {}) });
+      onChange({ query: keywords, tags, photographer: null, area: null });
+      setDraft("");
+      setAiNote([country, ...tags.map((t) => "#" + t), f.lightPhase, keywords].filter(Boolean).join(" · ") || "No filters found");
+    } catch (e) {
+      setAiNote(e instanceof Error ? e.message : "AI search failed");
+    } finally {
+      setAiBusy(false);
+    }
   };
 
   const hasFilters = !isEmpty;
   const showSuggestions = focused && suggestions.length > 0;
 
   const onEnter = () => {
+    if (aiMode) return void runAi();
     if (mode === "place") {
       // Arrowed onto a place → that place; otherwise text that names a place ("Germany") → the top match
       const picked = showSuggestions && navigated ? suggestions[active] : undefined;
@@ -161,6 +222,15 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading, 
         <svg aria-hidden viewBox="0 0 20 20" className="h-4 w-4 shrink-0 fill-neutral-400">
           <path d="M8.5 3a5.5 5.5 0 014.38 8.83l3.65 3.64-1.06 1.06-3.64-3.65A5.5 5.5 0 118.5 3zm0 1.5a4 4 0 100 8 4 4 0 000-8z" />
         </svg>
+        <button
+          type="button"
+          onClick={() => { setAiMode((m) => !m); setAiNote(null); setDraft(""); inputRef.current?.focus(); }}
+          aria-pressed={aiMode}
+          title="AI search: describe what you want in any language"
+          className={`flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-bold transition max-md:min-h-8 ${aiMode ? "bg-violet-500 text-white" : "bg-neutral-200 text-neutral-600 hover:bg-neutral-300 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"}`}
+        >
+          ✨ AI
+        </button>
 
         {value.area && (
           <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
@@ -201,22 +271,29 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading, 
             }
             if (e.key === "Escape") inputRef.current?.blur();
           }}
-          placeholder={hasFilters ? "Add more…" : "Search a place, country, #tag or @photographer"}
+          placeholder={aiMode ? "Ask in any language: golden hour mountains in Dolomites…" : hasFilters ? "Add more…" : "Search a place, country (try: iceland waterfall), #tag or @photographer"}
           className="min-w-[8rem] flex-1 bg-transparent py-1 text-sm outline-none placeholder:text-neutral-400 max-md:min-h-10 max-md:text-base"
           aria-label="Search photos"
           aria-autocomplete="list"
           aria-expanded={showSuggestions}
         />
 
-        {loading && <span className="h-3 w-3 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-600" aria-label="Loading" />}
-        {hasFilters && (
+        {aiMode && (
+          <button type="button" onClick={() => void runAi()} disabled={aiBusy || draft.trim().length < 2} className="shrink-0 rounded-full bg-violet-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-violet-400 disabled:opacity-40">
+            {aiBusy ? "Thinking…" : "Search"}
+          </button>
+        )}
+        {(loading || aiBusy) && <span className="h-3 w-3 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-600" aria-label="Loading" />}
+        {(hasFilters || countryFilter) && (
           <button type="button" onClick={clearAll} className="text-xs text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200">
             Clear
           </button>
         )}
       </div>
 
-      {showSuggestions && (
+      {aiNote && <p role="status" className="mt-1 rounded-lg bg-violet-950/80 px-3 py-1 text-xs text-violet-100">✨ {aiNote}</p>}
+
+      {showSuggestions && !aiMode && (
         <ul role="listbox" className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-auto rounded-xl border border-neutral-200 bg-white py-1 text-sm shadow-lg dark:border-neutral-800 dark:bg-neutral-900">
           <li className="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
             {mode === "person" ? "Photographers" : mode === "tag" ? "Tags" : "Places · zoom there & show pins inside"}
