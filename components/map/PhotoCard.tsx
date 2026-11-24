@@ -16,6 +16,7 @@ import DeleteDialog from "@/components/social/DeleteDialog";
 import FieldNotes from "./FieldNotes";
 import LightPlanner from "./LightPlanner";
 import GpsInlineEditor from "./GpsInlineEditor";
+import ReportButton from "./ReportButton";
 import { streetViewUrl } from "@/lib/walk";
 
 function exposureLine(p: Photo): string {
@@ -399,6 +400,8 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
         >
           🥾 {walking ? "End Nearby Photo Walk" : "Nearby Photo Walk · what else within 30 min?"}
         </button>
+
+        {!isOwner && <ReportButton photoId={photo.id} />}
 
         {photo.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 pt-1">

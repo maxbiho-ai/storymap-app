@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getRequestUserId } from "@/lib/server/userAuth";
+import { requireCreator } from "@/lib/server/creatorAccess";
 import { aiTags, timeBasedTags } from "@/lib/server/ai";
 
 export const runtime = "nodejs";
@@ -15,9 +15,8 @@ const MAX_IMAGE_B64 = 600_000; // ~450KB jpeg; the client sends the 480px thumbn
  * Without GEMINI_API_KEY (or if the model fails) it still returns the time-based tag.
  */
 export async function POST(req: Request) {
-  if (!(await getRequestUserId(req))) {
-    return NextResponse.json({ error: "Sign in required" }, { status: 401 });
-  }
+  const access = await requireCreator(req);
+  if (access instanceof NextResponse) return access;
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   if (typeof body.image === "string" && body.image.length > MAX_IMAGE_B64) {

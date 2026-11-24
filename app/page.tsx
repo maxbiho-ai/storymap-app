@@ -10,6 +10,10 @@ import PhotoDrawer from "@/components/map/PhotoDrawer";
 import AuthButton from "@/components/auth/AuthButton";
 import AuthModal from "@/components/auth/AuthModal";
 import { useAuth } from "@/hooks/useAuth";
+import { useCreatorAccess } from "@/hooks/useCreatorAccess";
+import { photosLeft, quotaLabel } from "@/lib/beta";
+import InviteGateModal from "@/components/beta/InviteGateModal";
+import AdminPanel from "@/components/admin/AdminPanel";
 import { getSupabase } from "@/lib/supabase/client";
 import { escapeLike } from "@/hooks/usePhotoSearch";
 import { usePins } from "@/hooks/usePins";
@@ -54,6 +58,11 @@ function StoryMap() {
   // Guest clicked "Upload": open the uploader right after login
   const [uploadAfterLogin, setUploadAfterLogin] = useState(false);
   const [profileName, setProfileName] = useState("");
+  // Invite-only beta: who may upload, and the two modals around it
+  const { access, loading: accessLoading, refresh: refreshAccess } = useCreatorAccess(user?.id ?? null);
+  const [gateOpen, setGateOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const canUploadNow = access.isAdmin || access.canUpload;
 
   // Saved map view prefs (style, 3D, view mode, countries) are applied once on the client, before the map mounts
   const [prefsReady, setPrefsReady] = useState(false);
@@ -260,13 +269,21 @@ function StoryMap() {
       setActiveCollection(null);
       useSocialStore.getState().reset();
     }
-    if (!userId) setUploadOpen(false);
-    else if (uploadAfterLogin) {
-      setUploadOpen(true);
-      setUploadAfterLogin(false);
+    if (!userId) {
+      setUploadOpen(false);
+      setGateOpen(false);
+      setAdminOpen(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
+
+  // Clicked Upload while signed out: once logged in and the profile is read, open the uploader (or the invite modal)
+  useEffect(() => {
+    if (!uploadAfterLogin || !userId || accessLoading) return;
+    setUploadAfterLogin(false);
+    if (canUploadNow) setUploadOpen(true);
+    else setGateOpen(true);
+  }, [uploadAfterLogin, userId, accessLoading, canUploadNow]);
 
   // Default photographer name = profile full name (fallback: sign-up metadata)
   useEffect(() => {
@@ -389,6 +406,11 @@ function StoryMap() {
       setAuthOpen(true);
       return;
     }
+    if (accessLoading) return;
+    if (!canUploadNow) {
+      setGateOpen(true);
+      return;
+    }
     setTripOpen(false);
     setUploadOpen((o) => !o);
   };
@@ -405,6 +427,7 @@ function StoryMap() {
   const onUploaded = useCallback(
     (uploaded: Photo[]) => {
       refresh();
+      void refreshAccess();
       setUploadOpen(false);
       if (!map || !uploaded.length) return;
 
@@ -430,7 +453,7 @@ function StoryMap() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [map, user, profileName],
+    [map, user, profileName, refreshAccess],
   );
 
   const requestPick = useCallback(() => {
@@ -541,7 +564,7 @@ function StoryMap() {
           <NotificationsBell onNavigate={onNotification} />
         </div>
         <div className="pointer-events-auto">
-          <AuthButton user={user} loading={authLoading} onLogin={() => { setUploadAfterLogin(false); setAuthOpen(true); }} onSignOut={signOut} />
+          <AuthButton user={user} loading={authLoading} onLogin={() => { setUploadAfterLogin(false); setAuthOpen(true); }} onSignOut={signOut} onAdmin={access.isAdmin ? () => setAdminOpen(true) : undefined} />
         </div>
       </header>
 
@@ -565,7 +588,7 @@ function StoryMap() {
         Upload panel stays mounted while hidden (pick mode), so the compressed photos
         and the form survive; after the map click it comes back with the coordinates.
       */}
-      {user && (
+      {user && canUploadNow && (
         <div
           className={`absolute z-30 flex max-h-[85dvh] flex-col overflow-hidden rounded-2xl shadow-2xl
             inset-x-2 bottom-2 md:inset-x-auto md:bottom-auto md:right-4 md:top-24 md:max-h-[calc(100dvh-7.5rem)] md:w-[420px]
@@ -582,9 +605,28 @@ function StoryMap() {
             onRequestLocationPick={requestPick}
             onUploaded={onUploaded}
             onReset={clearPicked}
+            maxPhotos={Number.isFinite(photosLeft(access)) ? photosLeft(access) : undefined}
+            quotaText={quotaLabel(access)}
           />
         </div>
       )}
+      {gateOpen && user && !canUploadNow && (
+        <InviteGateModal
+          userId={user.id}
+          email={user.email ?? ""}
+          fullName={profileName || (user.user_metadata?.full_name as string | undefined) || ""}
+          onClose={() => setGateOpen(false)}
+          onUnlocked={async () => {
+            const a = await refreshAccess();
+            setGateOpen(false);
+            if (a.canUpload || a.isAdmin) {
+              setTripOpen(false);
+              setUploadOpen(true);
+            }
+          }}
+        />
+      )}
+      {adminOpen && access.isAdmin && <AdminPanel onClose={() => setAdminOpen(false)} />}
       <AuthModal open={authOpen || recovery} recovery={recovery} onClose={() => { setAuthOpen(false); endRecovery(); }} />
     </main>
   );

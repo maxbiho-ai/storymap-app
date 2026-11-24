@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getRequestUserId } from "@/lib/server/userAuth";
+import { requireCreator } from "@/lib/server/creatorAccess";
 import { aiFieldNotes } from "@/lib/server/ai";
 
 export const runtime = "nodejs";
@@ -12,9 +12,8 @@ export const maxDuration = 30;
  * → { notes: { accessInfo, permitInfo }[] }  same order; empty when nothing is mentioned or the model is down.
  */
 export async function POST(req: Request) {
-  if (!(await getRequestUserId(req))) {
-    return NextResponse.json({ error: "Sign in required" }, { status: 401 });
-  }
+  const access = await requireCreator(req);
+  if (access instanceof NextResponse) return access;
   const body = (await req.json().catch(() => null)) as { texts?: unknown } | null;
   if (!body || !Array.isArray(body.texts) || body.texts.length > 50) {
     return NextResponse.json({ error: "texts must be an array (max 50)" }, { status: 400 });

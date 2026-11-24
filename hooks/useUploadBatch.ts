@@ -142,6 +142,8 @@ const geoKeyOf = (l: LatLng) => `${l.latitude.toFixed(4)},${l.longitude.toFixed(
 export function useUploadBatch(opts: {
   userId: string;
   defaultPhotographer: string;
+  /** Photos this user may still add (beta quota); omit for no limit */
+  maxPhotos?: number;
   onNeedsLocation: () => void;
   onUploaded: (photos: Photo[]) => void;
 }) {
@@ -156,6 +158,8 @@ export function useUploadBatch(opts: {
   }));
   const stateRef = useRef(state);
   stateRef.current = state;
+  const maxRef = useRef(opts.maxPhotos);
+  maxRef.current = opts.maxPhotos;
   const askedForLocation = useRef(false);
   const tagQueue = useRef<Set<string>>(new Set());
   /** Photos removed while still queued (stateRef lags one render behind a dispatch) */
@@ -174,7 +178,7 @@ export function useUploadBatch(opts: {
   const addFiles = useCallback(
     (files: File[]): { added: number; skipped: number } => {
       const images = files.filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
-      const room = Math.max(0, MAX_BATCH - stateRef.current.items.length);
+      const room = Math.max(0, Math.min(MAX_BATCH, maxRef.current ?? Infinity) - stateRef.current.items.length);
       const accepted = images.slice(0, room);
       const items: UploadItem[] = accepted.map((file) => ({
         id: crypto.randomUUID(),

@@ -17,6 +17,9 @@ interface Props {
   onUploaded: (photos: Photo[]) => void;
   /** Batch cleared (cancel / all uploaded): remove the picked marker from the map */
   onReset?: () => void;
+  /** Beta quota: photos still allowed (omit = no limit) and the "X / 15 used" label */
+  maxPhotos?: number;
+  quotaText?: string;
 }
 
 const input =
@@ -27,7 +30,8 @@ const input =
  * (a) EXIF → (b) compression, 2 in parallel → AI tags → translate → (c) Storage → (d) DB, 3 in parallel.
  * Title, description, location name and photographer apply to all photos; each photo can override them.
  */
-export default function BatchUploader({ userId, defaultPhotographer, pickedLocation, onRequestLocationPick, onUploaded, onReset }: Props) {
+export default function BatchUploader({ userId, defaultPhotographer, pickedLocation, onRequestLocationPick, onUploaded, onReset, maxPhotos, quotaText }: Props) {
+  const limit = Math.min(MAX_BATCH, maxPhotos ?? MAX_BATCH);
   /** Who the next map click belongs to: "all" photos without GPS, or one photo id */
   const [pickingFor, setPickingFor] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -36,6 +40,7 @@ export default function BatchUploader({ userId, defaultPhotographer, pickedLocat
   const batch = useUploadBatch({
     userId,
     defaultPhotographer,
+    maxPhotos,
     onNeedsLocation: () => {
       setPickingFor("all");
       onRequestLocationPick();
@@ -60,7 +65,7 @@ export default function BatchUploader({ userId, defaultPhotographer, pickedLocat
   const add = (files: FileList | File[] | null) => {
     if (!files) return;
     const { skipped } = batch.addFiles(Array.from(files));
-    setNotice(skipped > 0 ? `Up to ${MAX_BATCH} photos per upload: ${skipped} file${skipped > 1 ? "s were" : " was"} skipped.` : null);
+    setNotice(skipped > 0 ? `Up to ${limit} photo${limit === 1 ? "" : "s"} per upload${limit < MAX_BATCH ? " (your beta quota)" : ""}: ${skipped} file${skipped > 1 ? "s were" : " was"} skipped.` : null);
     if (fileRef.current) fileRef.current.value = "";
   };
 
@@ -84,7 +89,7 @@ export default function BatchUploader({ userId, defaultPhotographer, pickedLocat
 
   const busy = state.submitting;
   const noGps = state.items.filter((i) => i.compressed && i.exif && (i.exif.latitude == null || i.exif.longitude == null) && !i.manual);
-  const full = counts.total >= MAX_BATCH;
+  const full = counts.total >= limit;
   const pending = state.items.filter((i) => i.status !== "done");
   const firstLoc = pending.map((i) => resolveLocation(i, state.sharedLocation)).find(Boolean) ?? null;
   // One-click names for the shared field: only when all photos sit at one place
@@ -99,6 +104,12 @@ export default function BatchUploader({ userId, defaultPhotographer, pickedLocat
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+        {quotaText && (
+          <p className={`rounded-lg px-3 py-1.5 text-xs font-medium ${maxPhotos === 0 ? "bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-200" : "bg-amber-100 text-amber-900 dark:bg-amber-300/10 dark:text-amber-200"}`}>
+            {quotaText}
+            {maxPhotos === 0 && " · quota reached, ask the admin for more"}
+          </p>
+        )}
         {/* Drop zone */}
         {!full && !busy && (
           <label
@@ -107,9 +118,9 @@ export default function BatchUploader({ userId, defaultPhotographer, pickedLocat
             className={`flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-neutral-300 text-center text-sm text-neutral-500 hover:border-amber-400 dark:border-neutral-700 ${counts.total ? "p-3" : "p-8"}`}
           >
             <span className="font-medium text-neutral-700 dark:text-neutral-200">
-              {counts.total ? `Add more photos (${counts.total}/${MAX_BATCH})` : "Drop photos here or click to choose"}
+              {counts.total ? `Add more photos (${counts.total}/${limit})` : "Drop photos here or click to choose"}
             </span>
-            {!counts.total && <span className="text-xs">Up to {MAX_BATCH} photos · JPEG / PNG / HEIC · resized to 2048px in your browser</span>}
+            {!counts.total && <span className="text-xs">Up to {limit} photos · JPEG / PNG / HEIC · resized to 2048px in your browser</span>}
             <input ref={fileRef} type="file" multiple accept="image/*,.heic,.heif" className="hidden" onChange={(e) => add(e.target.files)} />
           </label>
         )}

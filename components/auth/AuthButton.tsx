@@ -8,10 +8,12 @@ interface Props {
   loading: boolean;
   onLogin: () => void;
   onSignOut: () => void;
+  /** Admins only: opens the admin panel */
+  onAdmin?: () => void;
 }
 
 /** בסרגל העליון: "התחברות" למשתמש אורח, או עיגול עם האות הראשונה + תפריט התנתקות */
-export default function AuthButton({ user, loading, onLogin, onSignOut }: Props) {
+export default function AuthButton({ user, loading, onLogin, onSignOut, onAdmin }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -57,6 +59,15 @@ export default function AuthButton({ user, loading, onLogin, onSignOut }: Props)
             {user.user_metadata?.full_name && <p className="font-medium">{user.user_metadata.full_name as string}</p>}
             <p className="truncate text-xs text-neutral-400">{user.email}</p>
           </div>
+          {onAdmin && (
+            <button
+              type="button"
+              onClick={() => { setMenuOpen(false); onAdmin(); }}
+              className="w-full px-4 py-2.5 text-start text-amber-300 hover:bg-white/5"
+            >
+              Admin panel
+            </button>
+          )}
           <button
             type="button"
             onClick={() => { setMenuOpen(false); onSignOut(); }}
