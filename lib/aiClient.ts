@@ -100,3 +100,17 @@ export async function suggestPhotoSpots(date: string, stops: { name: string; lat
   if (!res.ok) throw new Error(data.error ?? "AI suggestions are unavailable right now");
   return Array.isArray(data.spots) ? data.spots : [];
 }
+
+export interface AiTripRouteDto {
+  title: string | null;
+  startTime: string;
+  stops: { name: string; latitude: number; longitude: number; description: string | null; durationMinutes: number; logistics: string | null; transitMinutes: number; transitNote: string | null }[];
+}
+
+/** AI Trip Assistant: one prompt → an ordered, timed route for a day. Throws an Error with a readable message on failure */
+export async function generateTripRoute(prompt: string, date: string, near: { latitude: number; longitude: number } | null): Promise<AiTripRouteDto> {
+  const res = await fetch("/api/ai/trip-route", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ prompt, date, near }) });
+  const data = (await res.json().catch(() => ({}))) as Partial<AiTripRouteDto> & { error?: string };
+  if (!res.ok || !Array.isArray(data.stops)) throw new Error(data.error ?? "The AI assistant is unavailable right now");
+  return data as AiTripRouteDto;
+}

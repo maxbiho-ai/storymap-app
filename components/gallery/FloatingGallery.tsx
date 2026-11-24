@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMap } from "react-map-gl";
 import { useMapStore } from "@/store/mapStore";
-import type { CountrySummary, LightCounts, Pin, Place } from "@/lib/pins";
+import { spotPhotoCount, type CountrySummary, type LightCounts, type Pin, type Place } from "@/lib/pins";
 import type { TimeOfDay } from "@/lib/timeOfDay";
 import TimeIcon from "@/components/map/TimeIcon";
 import { MAP_ID } from "@/components/map/constants";
@@ -98,6 +98,7 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
 
   const mode: "places" | "photos" | "spot" = filtersActive ? "photos" : openSpot?.length ? "spot" : "places";
   const photos = mode === "spot" ? openSpot! : gridPins;
+  const spotCount = useMemo(() => (mode === "spot" ? spotPhotoCount(photos) : photos.length), [mode, photos]);
   const placeCount = useMemo(() => summary.reduce((n, c) => n + c.places.length, 0), [summary]);
   // The timeline only makes sense for one trip / country / area / person at a time
   const canTimeline = Boolean(countryFilter || spotFilter || area || photographer) && matchCount > 1;
@@ -113,7 +114,7 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
     ) : mode === "spot" ? (
       <>
         This spot
-        <span className="ms-2 font-normal text-neutral-400">{photos.length} photo{photos.length === 1 ? "" : "s"}</span>
+        <span className="ms-2 font-normal text-neutral-400">{spotCount} photo{spotCount === 1 ? "" : "s"}</span>
       </>
     ) : (
       <>

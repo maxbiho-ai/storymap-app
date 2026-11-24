@@ -8,12 +8,12 @@ import type { Photo } from "@/types/photo";
  * The lightweight global pin layer: one small row per photo, for EVERY matching photo on the map
  * (the sidebar's 500-photo limit never applies to it). Full rows load on demand, only for open cards.
  */
-export const PIN_COLUMNS = "id, latitude, longitude, location_name, thumb_url, photo_url, taken_at, taken_tz, title, tags, lens, shutter_speed";
+export const PIN_COLUMNS = "id, latitude, longitude, location_name, thumb_url, photo_url, taken_at, taken_tz, title, tags, lens, shutter_speed, image_urls";
 
 export type RawPin = Pick<
   Photo,
   "id" | "latitude" | "longitude" | "location_name" | "thumb_url" | "photo_url" | "taken_at" | "taken_tz" | "title" | "tags" | "lens" | "shutter_speed"
->;
+> & { image_urls?: string[] | null };
 
 /** Solar phase at capture: golden-hour sunrise / sunset, blue hour, night, or daytime */
 export type PinPhase = LightKey | "day";
@@ -22,6 +22,8 @@ export interface Pin extends RawPin {
   /** Canonical country name parsed from location_name */
   country: string | null;
   solar_phase: PinPhase | null;
+  /** Only for pins holding several images (Social Planner posts): lets every count match the card's carousel */
+  image_urls?: string[];
   /** taken_at as epoch ms (null when unknown) */
   ts: number | null;
 }
@@ -44,7 +46,15 @@ export function toPin(raw: RawPin): Pin {
     country: countryFromLocation(raw.location_name),
     solar_phase: lightKeyOf(raw),
     ts: Number.isNaN(ts) ? null : ts,
+    ...(raw.image_urls && raw.image_urls.length > 1 ? { image_urls: raw.image_urls } : {}),
   };
+}
+
+/** Distinct images behind a set of pins = the length of the card's carousel (a multi-image post counts every image) */
+export function spotPhotoCount(members: Pin[]): number {
+  const seen = new Set<string>();
+  for (const p of members) for (const u of p.image_urls?.length ? p.image_urls : [p.photo_url || p.id]) seen.add(u);
+  return seen.size;
 }
 
 const PAGE = 1000;

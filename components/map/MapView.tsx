@@ -5,7 +5,7 @@ import Map, { Marker, NavigationControl, GeolocateControl, Source, Layer, useMap
 import type { Photo } from "@/types/photo";
 import { useMapStore, roundBounds, type Bounds } from "@/store/mapStore";
 import { useClusters, type ClusterItem } from "@/hooks/useClusters";
-import { boundsOf, distKm, exactKey, type Pin, type PinGroup } from "@/lib/pins";
+import { boundsOf, distKm, exactKey, spotPhotoCount, type Pin, type PinGroup } from "@/lib/pins";
 import { canonicalCountry } from "@/lib/countries";
 import PhotoPin from "./PhotoPin";
 import ClusterPin from "./ClusterPin";
@@ -37,6 +37,8 @@ interface Props {
   countryCounts: Map<string, number>;
   /** Floating country summary pills */
   countryPills: CountryPill[];
+  /** Countries that light up (flight-only photos excluded) */
+  visitedCountries?: Set<string>;
   mapStyle?: string;
   /** Trip list view: [lng, lat] points joined by a route line, in list order */
   route?: [number, number][];
@@ -63,7 +65,7 @@ const CARD_W = 340;
 
 const lineFc = (coordinates: [number, number][]) => ({ type: "Feature" as const, properties: {}, geometry: { type: "LineString" as const, coordinates } });
 
-export default function MapView({ pins, groups, selected, stack, countryCounts, countryPills, mapStyle, route, timeline }: Props) {
+export default function MapView({ pins, groups, selected, stack, countryCounts, countryPills, visitedCountries, mapStyle, route, timeline }: Props) {
   const { [MAP_ID]: map } = useMap();
   const bounds = useMapStore((s) => s.bounds);
   const setViewport = useMapStore((s) => s.setViewport);
@@ -370,7 +372,7 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
           photo={top}
           longitude={g.longitude}
           latitude={g.latitude}
-          count={members.length}
+          count={spotPhotoCount(members)}
           position={gpsEdit ? undefined : pos}
           highlighted={!gpsEdit && members.some((p) => p.id === hoveredId)}
           selected={isSel}
@@ -385,11 +387,11 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
         key={`s-${g.key}`}
         longitude={g.longitude}
         latitude={g.latitude}
-        count={members.length}
+        count={spotPhotoCount(members)}
         active={isSel || members.some((p) => p.id === hoveredId)}
         dimmed={Boolean(gpsEdit)}
         onClick={() => onGroupClick(g)}
-        onHover={(h) => setDotHover(h ? { longitude: g.longitude, latitude: g.latitude, pin: members[0], count: members.length } : null)}
+        onHover={(h) => setDotHover(h ? { longitude: g.longitude, latitude: g.latitude, pin: members[0], count: spotPhotoCount(members) } : null)}
       />
     );
   };
@@ -421,7 +423,7 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
       )}
 
       {/* Countries with photos: hover highlight + tooltip, click filters */}
-      <CountryLayer counts={countryCounts} pills={countryPills} active={countryFilter} enabled={countriesOn} light={mapMode === "streets"} disabled={busy} onPick={setCountryFilter} />
+      <CountryLayer counts={countryCounts} visited={visitedCountries} pills={countryPills} active={countryFilter} enabled={countriesOn} light={mapMode === "streets"} disabled={busy} onPick={setCountryFilter} />
 
       {/* Heatmap view: photo density hotspots (dots take over once zoomed in) */}
       {heatData && (

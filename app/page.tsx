@@ -19,7 +19,7 @@ import { escapeLike, usePopularTags } from "@/hooks/usePhotoSearch";
 import { usePins } from "@/hooks/usePins";
 import { useFullPhotos } from "@/hooks/useFullPhotos";
 import { useMapStore, startViewPrefs } from "@/store/mapStore";
-import { loadCountryIndex, resolveCountry } from "@/lib/countryGeo";
+import { isFlightPhoto, loadCountryIndex, resolveCountry } from "@/lib/countryGeo";
 import type { CountryPill } from "@/components/map/CountryLayer";
 import { boundsOf, groupPins, summarizePlaces, timelineCoords, toPin, type Pin } from "@/lib/pins";
 import { MAP_ID } from "@/components/map/constants";
@@ -155,11 +155,26 @@ function StoryMap() {
     return m;
   }, [pinsBase]);
 
+  // Countries that light up: in-flight shots (airplane / flight tags) only count when one is the country's only photo
+  const visitedCountriesInfo = useMemo(() => {
+    const total = new Map<string, number>();
+    const ground = new Set<string>();
+    for (const p of pinsBase) {
+      if (!p.country) continue;
+      total.set(p.country, (total.get(p.country) ?? 0) + 1);
+      if (!isFlightPhoto(p.tags)) ground.add(p.country);
+    }
+    return { ground, visited: new Set([...total].filter(([c, n]) => ground.has(c) || n === 1).map(([c]) => c)) };
+  }, [pinsBase]);
+  const countryHasGround = visitedCountriesInfo.ground;
+  const visitedCountries = visitedCountriesInfo.visited;
+
   // One pill per visited country, on the photo nearest to the middle of that country's photos
   const countryPills = useMemo<CountryPill[]>(() => {
     const acc = new Map<string, { n: number; lat: number; lng: number; pins: Pin[] }>();
     for (const p of pinsBase) {
       if (!p.country) continue;
+      if (!visitedCountries.has(p.country) || (isFlightPhoto(p.tags) && countryHasGround.has(p.country))) continue;
       const a = acc.get(p.country) ?? { n: 0, lat: 0, lng: 0, pins: [] };
       a.n++;
       a.lat += p.latitude;
@@ -533,7 +548,7 @@ function StoryMap() {
     <main className="relative h-dvh w-full overflow-hidden bg-neutral-950">
       <div className="absolute inset-0">
         {prefsReady ? (
-          <MapView pins={pins} groups={groups} selected={selectedPhoto} stack={selectedStack} countryCounts={countryCounts} countryPills={countryPills} route={route} timeline={timeline} />
+          <MapView pins={pins} groups={groups} selected={selectedPhoto} stack={selectedStack} countryCounts={countryCounts} countryPills={countryPills} visitedCountries={visitedCountries} route={route} timeline={timeline} />
         ) : (
           <div className="h-full w-full animate-pulse bg-neutral-900" />
         )}

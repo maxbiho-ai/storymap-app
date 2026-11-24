@@ -508,3 +508,110 @@ export async function aiPhotoSpots(input: ScoutInput): Promise<ScoutSpot[]> {
     return [];
   }
 }
+
+// ---------------------------------------------------------------------------
+// AI Trip Assistant: one prompt → an ordered, timed photo route
+// ---------------------------------------------------------------------------
+
+export interface AiRouteStop {
+  name: string;
+  latitude: number;
+  longitude: number;
+  description: string | null;
+  durationMinutes: number;
+  logistics: string | null;
+  transitMinutes: number;
+  transitNote: string | null;
+}
+export interface AiRoute {
+  title: string | null;
+  /** HH:MM local start of the first stop */
+  startTime: string;
+  stops: AiRouteStop[];
+}
+
+const clampInt = (v: unknown, lo: number, hi: number, fallback: number) => {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+};
+
+/**
+ * Turns "I'm in Tbilisi tomorrow, build me a sunrise-to-sunset route" into ordered stops with exact coordinates, what to shoot,
+ * how long to stay, and the transit from the previous stop. Stops are not capped. Throws on model failure so the caller can say so.
+ */
+export async function aiTripRoute(input: { prompt: string; date: string; near?: { latitude: number; longitude: number } | null }): Promise<AiRoute> {
+  const out = await geminiJson<{ title?: unknown; startTime?: unknown; stops?: Record<string, unknown>[] }>(
+    [
+      {
+        text: [
+          "You are an expert local travel photographer planning one packed photography day. Build an ORDERED route from first light to last light.",
+          `Date: ${input.date}.`,
+          input.near ? `The traveller's map is currently centred near ${input.near.latitude.toFixed(3)}, ${input.near.longitude.toFixed(3)} (use it only if the request names no place).` : "",
+          `Request: "${input.prompt.slice(0, 600)}"`,
+          "",
+          "Rules:",
+          "- Only REAL, named places that exist (viewpoints, bridges, squares, old towns, churches, peaks, lakes, markets, streets, parks). Never invent one; leave it out if unsure.",
+          "- latitude / longitude: decimal degrees of that exact place, as accurate as you can.",
+          "- Order the stops so the route is geographically efficient AND matches the light: sunrise spots first, soft-light and interior spots mid-day, golden hour / sunset / blue hour spots last.",
+          "- startTime: HH:MM (24h, the place's local time) at which the first stop begins, about 30-45 minutes before sunrise for that date and place.",
+          "- durationMinutes: how long to stay at each stop (15-240).",
+          "- transitMinutes: minutes to get there from the PREVIOUS stop (0 for the first stop); transitNote: how (walk / drive / metro) in at most 70 characters.",
+          "- description: max 160 characters, what to shoot and which light suits it. logistics: entry / ticket / parking / permit / opening-hours note, max 120 characters, or empty.",
+          "- Plain hyphens only, no emojis. If the request asks for many stops, give them all (up to 25).",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      },
+    ],
+    {
+      type: "OBJECT",
+      properties: {
+        title: { type: "STRING" },
+        startTime: { type: "STRING" },
+        stops: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              name: { type: "STRING" },
+              latitude: { type: "NUMBER" },
+              longitude: { type: "NUMBER" },
+              description: { type: "STRING" },
+              durationMinutes: { type: "NUMBER" },
+              logistics: { type: "STRING" },
+              transitMinutes: { type: "NUMBER" },
+              transitNote: { type: "STRING" },
+            },
+            required: ["name", "latitude", "longitude", "description", "durationMinutes", "transitMinutes"],
+          },
+        },
+      },
+      required: ["startTime", "stops"],
+    },
+    40_000,
+    45_000,
+  );
+  const stops: AiRouteStop[] = [];
+  const seen = new Set<string>();
+  for (const s of out.stops ?? []) {
+    const name = typeof s.name === "string" ? noLongDashes(s.name).replace(/\s+/g, " ").trim().slice(0, 120) : "";
+    const lat = Number(s.latitude);
+    const lng = Number(s.longitude);
+    if (!name || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    stops.push({
+      name,
+      latitude: lat,
+      longitude: lng,
+      description: cleanNote(s.description),
+      durationMinutes: clampInt(s.durationMinutes, 10, 480, 45),
+      logistics: cleanNote(s.logistics),
+      transitMinutes: stops.length ? clampInt(s.transitMinutes, 0, 600, 10) : 0,
+      transitNote: cleanNote(s.transitNote),
+    });
+    if (stops.length >= 40) break;
+  }
+  const st = typeof out.startTime === "string" ? /^(\d{1,2}):(\d{2})/.exec(out.startTime.trim()) : null;
+  const startTime = st && +st[1] < 24 && +st[2] < 60 ? `${st[1].padStart(2, "0")}:${st[2]}` : "07:00";
+  return { title: typeof out.title === "string" ? noLongDashes(out.title).trim().slice(0, 100) || null : null, startTime, stops };
+}

@@ -11,11 +11,28 @@ export interface Stop {
   source: "search" | "storymap" | "ai";
   thumb?: string | null;
   note?: string | null;
+  /** Short photography / lighting description */
+  description?: string | null;
+  /** How long to stay (minutes); DEFAULT_DURATION when missing */
+  durationMinutes?: number;
+  /** Minutes to get here from the previous stop (0 for the first stop of a day) */
+  transitMinutes?: number;
+  transitNote?: string | null;
+  /** Entry / ticket / parking / permit note */
+  logistics?: string | null;
+  /** Reference ("shot list") photos: data URLs of compressed images, or StoryMap image URLs. At most MAX_REF_PHOTOS */
+  refPhotos?: string[];
 }
+
+export const DEFAULT_DURATION = 60;
+export const DEFAULT_START = "07:00";
+export const MAX_REF_PHOTOS = 4;
 
 export interface TripDay {
   /** YYYY-MM-DD */
   date: string;
+  /** HH:MM the first stop begins (DEFAULT_START when missing) */
+  startTime?: string;
   stops: Stop[];
 }
 
@@ -27,7 +44,8 @@ export interface Trip {
   days: TripDay[];
 }
 
-export const MAX_TRIP_DAYS = 21;
+/** Only a guard against a typo like year 20000: no real trip is this long. There is no cap on stops per day. */
+export const MAX_TRIP_DAYS = 1000;
 export const DAY_COLORS = ["#fbbf24", "#38bdf8", "#f472b6", "#a3e635", "#c084fc", "#fb923c", "#2dd4bf"];
 
 export const uid = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `s${Date.now()}${Math.random().toString(36).slice(2)}`);
@@ -42,7 +60,7 @@ export function addDays(date: string, n: number): string {
   return isoDate(new Date(y, m - 1, d + n));
 }
 
-/** Inclusive list of dates (capped at MAX_TRIP_DAYS; empty when the range is invalid) */
+/** Inclusive list of dates (empty when the range is invalid) */
 export function datesBetween(start: string, end: string): string[] {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < start) return [];
   const out: string[] = [];
@@ -54,7 +72,7 @@ export function datesBetween(start: string, end: string): string[] {
 export function withDates(trip: Trip, startDate: string, endDate: string): Trip {
   const dates = datesBetween(startDate, endDate);
   if (!dates.length) return { ...trip, startDate, endDate };
-  return { ...trip, startDate, endDate, days: dates.map((date, i) => ({ date, stops: trip.days[i]?.stops ?? [] })) };
+  return { ...trip, startDate, endDate, days: dates.map((date, i) => ({ ...trip.days[i], date, stops: trip.days[i]?.stops ?? [] })) };
 }
 
 export function newTrip(): Trip {
@@ -66,6 +84,59 @@ export function formatDay(date: string): string {
   const [y, m, d] = date.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }
+
+/* ------------------------------------------------------------------ */
+/* Rolling schedule                                                    */
+/* ------------------------------------------------------------------ */
+
+/** "07:30" → 450 (null when it is not a time) */
+export function parseClock(v: string | null | undefined): number | null {
+  const m = /^\s*(\d{1,2})[:.h]?(\d{2})\s*$/.exec(v ?? "");
+  if (!m || +m[1] > 23 || +m[2] > 59) return null;
+  return +m[1] * 60 + +m[2];
+}
+/** 450 → "07:30" (wraps past midnight) */
+export function fmtClock(min: number): string {
+  const m = ((Math.round(min) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+/** "1:30", "90", "1h30", "45m" → minutes (null when unreadable) */
+export function parseDuration(v: string): number | null {
+  const t = v.trim().toLowerCase();
+  let m = /^(\d{1,2}):(\d{1,2})$/.exec(t) ?? /^(\d{1,2})h\s*(\d{1,2})?m?$/.exec(t);
+  if (m) return +m[1] * 60 + +(m[2] ?? 0);
+  m = /^(\d{1,4})\s*(m|min)?$/.exec(t);
+  return m ? +m[1] : null;
+}
+/** 90 → "1:30" */
+export const fmtDuration = (min: number) => `${Math.floor(min / 60)}:${String(Math.round(min % 60)).padStart(2, "0")}`;
+
+export interface TimedStop {
+  stop: Stop;
+  /** minutes from midnight (can pass 1440 on a long day) */
+  arriveMin: number;
+  departMin: number;
+  arrive: string;
+  depart: string;
+  duration: number;
+}
+
+/**
+ * The day's timetable: the first stop starts at the day's start time; every next stop is reached after the previous stop's
+ * duration plus its own transit time. Change any duration, transit, or the order and every later time follows.
+ */
+export function daySchedule(day: TripDay): TimedStop[] {
+  let t = parseClock(day.startTime) ?? parseClock(DEFAULT_START)!;
+  return day.stops.map((stop, i) => {
+    if (i > 0) t += Math.max(0, stop.transitMinutes ?? 0);
+    const duration = Math.max(0, stop.durationMinutes ?? DEFAULT_DURATION);
+    const row = { stop, arriveMin: t, departMin: t + duration, arrive: fmtClock(t), depart: fmtClock(t + duration), duration };
+    t += duration;
+    return row;
+  });
+}
+
+export const mapsLink = (s: { latitude: number; longitude: number }) => `https://maps.google.com/?q=${s.latitude.toFixed(6)},${s.longitude.toFixed(6)}`;
 
 /* ------------------------------------------------------------------ */
 /* Solar times                                                         */
@@ -217,11 +288,15 @@ export function dbSuggestions(pins: Pin[], stops: LL[], corridorKm = 12, perBuck
 export function scheduleText(trip: Trip): string {
   const lines: string[] = [trip.name, `${formatDay(trip.startDate)} to ${formatDay(trip.endDate)}`, ""];
   trip.days.forEach((day, i) => {
-    lines.push(`Day ${i + 1} - ${formatDay(day.date)}`);
+    lines.push(`Day ${i + 1} - ${formatDay(day.date)} - starts ${day.startTime ?? DEFAULT_START}`);
     if (!day.stops.length) lines.push("  (no stops yet)");
+    const timed = daySchedule(day);
     day.stops.forEach((s, j) => {
       const sol = solarFor(day.date, s.latitude, s.longitude);
-      lines.push(`  ${j + 1}. ${s.name}  (${s.latitude.toFixed(5)}, ${s.longitude.toFixed(5)})${s.note ? `  - ${s.note}` : ""}`);
+      lines.push(`  ${j + 1}. ${timed[j].arrive}  ${s.name}  (${s.latitude.toFixed(5)}, ${s.longitude.toFixed(5)})  [${fmtDuration(timed[j].duration)}]${s.note ? `  - ${s.note}` : ""}`);
+      if (s.description) lines.push(`     ${s.description}`);
+      if (s.transitNote || (j > 0 && s.transitMinutes)) lines.push(`     Transit: ${[j > 0 && s.transitMinutes ? `${s.transitMinutes} min` : null, s.transitNote].filter(Boolean).join(" · ")}`);
+      if (s.logistics) lines.push(`     Logistics: ${s.logistics}`);
       if (sol.polar) lines.push("     Polar day / night: no regular sunrise or sunset");
       else {
         lines.push(
@@ -243,9 +318,9 @@ export const SITE_URL = "https://my-storymap.netlify.app";
 export const WHATSAPP_SOFT_LIMIT = 2500;
 
 /**
- * The itinerary as WhatsApp text (*bold* headers, numbered stops, a Google Maps link per stop).
- * Detail levels, used in order until it fits `limit`: 0 = stop notes + light windows, 1 = no notes,
- * 2 = no light windows, 3 = compact (one line per stop, no blank lines). Names and links are never cut.
+ * The itinerary as WhatsApp text (*bold* headers, numbered timed stops, a Google Maps link per stop).
+ * Detail levels, used in order until it fits `limit`: 0 = everything, 1 = no logistics / transit notes,
+ * 2 = no descriptions, 3 = compact (one line per stop, no blank lines). Times, names and links are never cut.
  */
 export function whatsappItinerary(trip: Trip, limit = WHATSAPP_SOFT_LIMIT): string {
   const build = (level: number): string => {
@@ -255,23 +330,27 @@ export function whatsappItinerary(trip: Trip, limit = WHATSAPP_SOFT_LIMIT): stri
     trip.days.forEach((day, i) => {
       if (!day.stops.length) return;
       lines.push(...gap, `*Day ${i + 1} · ${formatDay(day.date)}*`);
+      const timed = daySchedule(day);
       day.stops.forEach((s, j) => {
-        const link = `https://maps.google.com/?q=${s.latitude.toFixed(6)},${s.longitude.toFixed(6)}`;
+        const link = mapsLink(s);
+        const t = timed[j];
         if (level >= 3) {
-          lines.push(`${j + 1}. ${s.name} ${link}`);
+          lines.push(`${t.arrive} ${j + 1}. ${s.name} ${link}`);
           return;
         }
-        lines.push(`${j + 1}. *${s.name}*`);
+        lines.push(`🕖 *${t.arrive}* · ${j + 1}. *${s.name}* (${fmtDuration(t.duration)})`);
         if (level < 2) {
-          const sol = solarFor(day.date, s.latitude, s.longitude);
-          const parts = [sol.goldenMorning && `🌅 ${sol.goldenMorning.join("–")}`, sol.goldenEvening && `🌇 ${sol.goldenEvening.join("–")}`].filter(Boolean);
-          if (parts.length) lines.push(`   ${parts.join("  ")}`);
+          const d = s.description ?? s.note;
+          if (d) lines.push(`   ${d}`);
         }
-        if (level < 1 && s.note) lines.push(`   ${s.note}`);
+        if (level < 1) {
+          if (j > 0 && (s.transitMinutes || s.transitNote)) lines.push(`   🚶 ${[s.transitMinutes ? `${s.transitMinutes} min` : null, s.transitNote].filter(Boolean).join(" · ")}`);
+          if (s.logistics) lines.push(`   🎟️ ${s.logistics}`);
+        }
         lines.push(`   📍 ${link}`);
       });
     });
-    lines.push(...gap, `Plan yours: ${SITE_URL}`);
+    lines.push(...gap, `Plan yours on StoryMap: ${SITE_URL}`);
     return lines.join("\n");
   };
   let text = build(0);

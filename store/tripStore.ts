@@ -13,6 +13,10 @@ interface TripState {
   addStop: (day: number, stop: Stop) => void;
   removeStop: (day: number, stopId: string) => void;
   moveStop: (day: number, from: number, to: number) => void;
+  /** Edit one stop's fields (times cascade because arrivals are computed) */
+  updateStop: (day: number, stopId: string, patch: Partial<Stop>) => void;
+  addStops: (day: number, stops: Stop[]) => void;
+  setDayStart: (day: number, time: string) => void;
   reset: () => void;
 }
 
@@ -40,5 +44,8 @@ export const useTripStore = create<TripState>((set) => ({
         return next;
       }),
     })),
+  updateStop: (day, stopId, patch) => set((s) => ({ trip: mapDay(s.trip, day, (st) => st.map((x) => (x.id === stopId ? { ...x, ...patch } : x))) })),
+  addStops: (day, stops) => set((s) => ({ trip: mapDay(s.trip, day, (st) => [...st, ...stops]) })),
+  setDayStart: (day, time) => set((s) => ({ trip: { ...s.trip, days: s.trip.days.map((d, i) => (i === day ? { ...d, startTime: time } : d)) } })),
   reset: () => set({ trip: newTrip() }),
 }));

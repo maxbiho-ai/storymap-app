@@ -7,8 +7,11 @@ import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { MAP_ID } from "@/components/map/constants";
 import { useTripStore } from "@/store/tripStore";
 import { getAllPins, boundsOf, type Pin } from "@/lib/pins";
-import { BUCKETS, DAY_COLORS, MAX_TRIP_DAYS, dbSuggestions, formatDay, scheduleText, solarFor, uid, whatsappItinerary, whatsappUrl, type SpotBucket, type SpotSuggestion, type Stop, type TripDay } from "@/lib/trip";
-import { suggestPhotoSpots, type ScoutSpotDto } from "@/lib/aiClient";
+import { BUCKETS, DAY_COLORS, DEFAULT_START, daySchedule, dbSuggestions, formatDay, parseClock, scheduleText, uid, whatsappItinerary, whatsappUrl, type SpotBucket, type SpotSuggestion, type Stop, type TripDay } from "@/lib/trip";
+import { generateTripRoute, suggestPhotoSpots, type ScoutSpotDto } from "@/lib/aiClient";
+import { exportTripXlsx } from "@/lib/tripExcel";
+import { useMapStore } from "@/store/mapStore";
+import StopCard from "./StopCard";
 import { deleteTrip, listTrips, loadTrip, saveTrip, type SavedTrip } from "@/lib/tripApi";
 import { googleMapsRouteUrl } from "@/hooks/useCollectionPhotos";
 import type { PlaceSuggestion } from "@/lib/geocode";
@@ -31,6 +34,10 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
   const removeStop = useTripStore((s) => s.removeStop);
   const moveStop = useTripStore((s) => s.moveStop);
   const reset = useTripStore((s) => s.reset);
+  const updateStop = useTripStore((s) => s.updateStop);
+  const addStops = useTripStore((s) => s.addStops);
+  const setDayStart = useTripStore((s) => s.setDayStart);
+  const setMapMode = useMapStore((s) => s.setMapMode);
 
   const [pins, setPins] = useState<Pin[]>([]);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
@@ -39,6 +46,22 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [spotsOpen, setSpotsOpen] = useState<Record<number, boolean>>({});
   const [ai, setAi] = useState<Record<string, { loading: boolean; spots?: ScoutSpotDto[]; error?: string }>>({});
+  /** Double-width drawer on desktop (compact toggle) */
+  const [wide, setWide] = useState(true);
+  const [activeDay, setActiveDay] = useState(0);
+  const [prompt, setPrompt] = useState("");
+  const [planning, setPlanning] = useState(false);
+  const [xlsxBusy, setXlsxBusy] = useState(false);
+
+  // The planner works on the road map: switch to Streets while it is open, put the user's style back when it closes
+  useEffect(() => {
+    if (!open) return;
+    const before = useMapStore.getState().mapMode;
+    if (before !== "streets") setMapMode("streets");
+    return () => {
+      if (useMapStore.getState().mapMode === "streets" && before !== "streets") setMapMode(before);
+    };
+  }, [open, setMapMode]);
 
   useEffect(() => {
     if (!open) return;
@@ -53,7 +76,7 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
     const box = boundsOf(stops);
     if (!map || !box) return;
     if (stops.length === 1) map.flyTo({ center: box[0], zoom: Math.max(map.getZoom(), 11), duration: 1200, essential: true });
-    else map.fitBounds(box, { padding: { top: 120, bottom: 80, left: 80, right: 440 }, maxZoom: 13, duration: 1200 });
+    else map.fitBounds(box, { padding: { top: 120, bottom: 80, left: 80, right: wide ? 860 : 440 }, maxZoom: 13, duration: 1200 });
   };
   const allStops = useMemo(() => trip.days.flatMap((d) => d.stops), [trip.days]);
 
@@ -151,6 +174,56 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
     }
   };
 
+  const exportXlsx = async () => {
+    setXlsxBusy(true);
+    try {
+      await exportTripXlsx(trip);
+      flash("ok", "Excel file downloaded");
+    } catch (e) {
+      flash("err", e instanceof Error ? e.message : "Could not build the Excel file");
+    } finally {
+      setXlsxBusy(false);
+    }
+  };
+
+  const planWithAi = async () => {
+    if (!user) return onRequireLogin();
+    const text = prompt.trim();
+    if (text.length < 3) return flash("err", "Describe the day you want first");
+    const di = Math.min(activeDay, trip.days.length - 1);
+    const day = trip.days[di];
+    if (!day) return;
+    setPlanning(true);
+    try {
+      const c = map?.getCenter();
+      const route = await generateTripRoute(text, day.date, c ? { latitude: c.lat, longitude: c.lng } : null);
+      const stops: Stop[] = route.stops.map((r) => ({
+        id: uid(),
+        name: r.name,
+        latitude: r.latitude,
+        longitude: r.longitude,
+        source: "ai",
+        description: r.description,
+        durationMinutes: r.durationMinutes,
+        logistics: r.logistics,
+        transitMinutes: r.transitMinutes,
+        transitNote: r.transitNote,
+      }));
+      if (!day.stops.length) setDayStart(di, route.startTime);
+      else stops[0] = { ...stops[0], transitMinutes: stops[0].transitMinutes || 15 };
+      addStops(di, stops);
+      if (route.title && trip.name === "My photo trip") setName(route.title);
+      setMapMode("streets");
+      fitStops([...day.stops, ...stops]);
+      flash("ok", `Added ${stops.length} stops to Day ${di + 1}`);
+      setPrompt("");
+    } catch (e) {
+      flash("err", e instanceof Error ? e.message : "The AI assistant failed");
+    } finally {
+      setPlanning(false);
+    }
+  };
+
   const copyItinerary = async () => {
     try {
       await navigator.clipboard.writeText(whatsappItinerary(trip));
@@ -178,7 +251,7 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
   return (
     <aside
       aria-label="Plan a Photo Trip"
-      className="pointer-events-auto absolute inset-x-2 top-[4.5rem] z-30 flex max-h-[70dvh] flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/95 text-neutral-100 shadow-2xl backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:top-24 md:max-h-none md:w-[400px]"
+      className={`pointer-events-auto absolute inset-x-2 top-[4.5rem] z-30 flex max-h-[70dvh] flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/95 text-neutral-100 shadow-2xl backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:top-24 md:max-h-none ${wide ? "md:w-[min(820px,calc(100vw-2rem))]" : "md:w-[400px]"}`}
     >
       <div className="flex items-start justify-between gap-2 border-b border-white/10 px-4 py-3">
         <div className="min-w-0 flex-1">
@@ -191,6 +264,7 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
             className="mt-1 w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm text-neutral-200 outline-none hover:border-white/10 focus:border-amber-300"
           />
         </div>
+        <button type="button" onClick={() => setWide((w) => !w)} aria-label={wide ? "Collapse trip planner" : "Expand trip planner"} title={wide ? "Collapse" : "Expand"} className="hidden h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-white/10 hover:text-white md:flex">{wide ? "⇥" : "⇤"}</button>
         <button type="button" onClick={() => setOpen(false)} aria-label="Close trip planner" className="text-xl leading-none text-neutral-400 hover:text-white">×</button>
       </div>
 
@@ -206,7 +280,34 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
             <input type="date" value={trip.endDate} min={trip.startDate} onChange={(e) => e.target.value && setDates(trip.startDate, e.target.value)} className={`${inputCls} mt-0.5 w-full [color-scheme:dark]`} />
           </label>
         </div>
-        {trip.days.length >= MAX_TRIP_DAYS && <p className="text-[11px] text-amber-200/80">Trips are limited to {MAX_TRIP_DAYS} days.</p>}
+
+        {/* AI Trip Assistant */}
+        <div className="rounded-2xl border border-amber-300/25 bg-amber-300/[0.06] p-3">
+          <label className="text-xs font-semibold text-amber-100" htmlFor="trip-ai-prompt">✨ AI Trip Assistant</label>
+          <textarea
+            id="trip-ai-prompt"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === "Enter" && void planWithAi()}
+            rows={2}
+            maxLength={600}
+            placeholder="I'm traveling tomorrow in Tbilisi, build me an organized sunrise-to-sunset route with the most photogenic spots"
+            className={`${inputCls} mt-1.5 w-full resize-y`}
+          />
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            {trip.days.length > 1 && (
+              <label className="text-[11px] text-neutral-400">
+                Add to{" "}
+                <select value={Math.min(activeDay, trip.days.length - 1)} onChange={(e) => setActiveDay(Number(e.target.value))} className="rounded-md border border-white/10 bg-neutral-900 px-1.5 py-1 text-xs text-white">
+                  {trip.days.map((d, i) => <option key={d.date + i} value={i}>Day {i + 1} · {formatDay(d.date)}</option>)}
+                </select>
+              </label>
+            )}
+            <button type="button" onClick={planWithAi} disabled={planning} className="ml-auto rounded-xl bg-amber-300 px-4 py-2 text-xs font-semibold text-neutral-900 hover:bg-amber-200 disabled:opacity-60 max-md:min-h-11">
+              {planning ? "Building your route…" : "Build my route"}
+            </button>
+          </div>
+        </div>
 
         {/* Share: WhatsApp-formatted itinerary with one-tap Google Maps links */}
         <div className="grid grid-cols-2 gap-2">
@@ -235,6 +336,7 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
           <button type="button" className={smallBtn} onClick={showSaved} disabled={busy === "list"}>📂 My trips</button>
           <button type="button" className={smallBtn} onClick={copy}>📋 Copy schedule</button>
           <button type="button" className={smallBtn} onClick={download}>⬇ Download</button>
+          <button type="button" className={`${smallBtn} !bg-emerald-400/20 !text-emerald-100 hover:!bg-emerald-400/30`} onClick={exportXlsx} disabled={!allStops.length || xlsxBusy}>{xlsxBusy ? "Building…" : "📊 Export Excel (.xlsx)"}</button>
           <button type="button" className={smallBtn} onClick={() => { if (!allStops.length || window.confirm("Start a new trip? Unsaved changes are lost.")) { reset(); setSpotsOpen({}); setAi({}); } }}>＋ New</button>
           {allStops.length > 0 && <button type="button" className={smallBtn} onClick={() => fitStops(allStops)}>⤢ Fit</button>}
         </div>
@@ -268,54 +370,46 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
           const aiState = ai[aiKey];
           const mapsUrl = day.stops.length ? googleMapsRouteUrl(day.stops) : null;
           const proximity = day.stops[day.stops.length - 1] ?? trip.days.slice(0, di).flatMap((d) => d.stops).pop() ?? null;
+          const timed = daySchedule(day);
           const dbTotal = suggestions ? BUCKETS.reduce((n, b) => n + suggestions[b.key].length, 0) : 0;
           return (
-            <section key={day.date + di} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-              <header className="mb-2 flex items-center gap-2">
+            <section key={day.date + di} onFocusCapture={() => setActiveDay(di)} onClick={() => setActiveDay(di)} className={`rounded-2xl border bg-white/[0.03] p-3 ${di === Math.min(activeDay, trip.days.length - 1) ? "border-white/25" : "border-white/10"}`}>
+              <header className="mb-2 flex flex-wrap items-center gap-2">
                 <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: color }} />
                 <h3 className="text-sm font-semibold">Day {di + 1} <span className="font-normal text-neutral-400">- {formatDay(day.date)}</span></h3>
+                <label className="ml-auto flex items-center gap-1.5 text-[11px] text-neutral-400">
+                  Start time
+                  <input
+                    type="time"
+                    value={day.startTime ?? DEFAULT_START}
+                    onChange={(e) => parseClock(e.target.value) !== null && setDayStart(di, e.target.value)}
+                    aria-label={`Day ${di + 1} start time`}
+                    className="rounded-md border border-white/10 bg-neutral-900 px-1.5 py-1 font-mono text-xs text-white [color-scheme:dark]"
+                  />
+                </label>
                 {mapsUrl && day.stops.length > 1 && (
-                  <a href={mapsUrl} target="_blank" rel="noopener noreferrer" className="ml-auto text-[11px] text-amber-200 hover:underline">Google Maps ↗</a>
+                  <a href={mapsUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-amber-200 hover:underline">Google Maps ↗</a>
                 )}
               </header>
 
               <ol className="space-y-2">
-                {day.stops.map((s, si) => {
-                  const sol = solarFor(day.date, s.latitude, s.longitude);
-                  return (
-                    <li key={s.id} className="rounded-xl bg-neutral-900/80 p-2">
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-extrabold text-neutral-950" style={{ background: color }}>{si + 1}</span>
-                        {s.thumb && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={s.thumb} alt="" className="h-8 w-8 shrink-0 rounded-md object-cover" />
-                        )}
-                        <button type="button" onClick={() => map?.flyTo({ center: [s.longitude, s.latitude], zoom: Math.max(map.getZoom(), 12), duration: 1000, essential: true })} className="min-w-0 flex-1 text-start">
-                          <span className="block truncate text-xs font-semibold" dir="auto">{s.name}</span>
-                          <span className="block truncate font-mono text-[10px] text-neutral-500">{s.latitude.toFixed(5)}, {s.longitude.toFixed(5)}{s.source === "ai" ? " · AI" : ""}</span>
-                        </button>
-                        <span className="flex shrink-0 items-center">
-                          <button type="button" onClick={() => moveStop(di, si, si - 1)} disabled={si === 0} aria-label="Move up" className="h-6 w-6 rounded text-neutral-400 hover:bg-white/10 disabled:opacity-25">↑</button>
-                          <button type="button" onClick={() => moveStop(di, si, si + 1)} disabled={si === day.stops.length - 1} aria-label="Move down" className="h-6 w-6 rounded text-neutral-400 hover:bg-white/10 disabled:opacity-25">↓</button>
-                          <button type="button" onClick={() => removeStop(di, s.id)} aria-label={`Remove ${s.name}`} className="h-6 w-6 rounded text-neutral-400 hover:bg-white/10 hover:text-red-300">×</button>
-                        </span>
-                      </div>
-                      {s.note && <p className="mt-1 line-clamp-2 text-[10px] text-neutral-400">{s.note}</p>}
-                      {sol.polar ? (
-                        <p className="mt-1.5 text-[10px] text-sky-200">Polar day / night: no regular sunrise or sunset</p>
-                      ) : (
-                        <dl className="mt-1.5 grid grid-cols-3 gap-1 text-center text-[10px]">
-                          <div className="rounded-md bg-amber-300/10 px-1 py-1"><dt className="text-neutral-400">🌅 Sunrise</dt><dd className="font-semibold tabular-nums text-amber-100">{sol.sunrise ?? "-"}</dd></div>
-                          <div className="rounded-md bg-orange-300/10 px-1 py-1"><dt className="text-neutral-400">✨ Golden hour</dt><dd className="font-semibold tabular-nums text-orange-100">{sol.goldenEvening ? sol.goldenEvening[0] : "-"}</dd></div>
-                          <div className="rounded-md bg-rose-300/10 px-1 py-1"><dt className="text-neutral-400">🌇 Sunset</dt><dd className="font-semibold tabular-nums text-rose-100">{sol.sunset ?? "-"}</dd></div>
-                          <div className="col-span-3 text-[10px] text-neutral-500">
-                            Morning golden {sol.goldenMorning?.join("-") ?? "-"} · evening golden {sol.goldenEvening?.join("-") ?? "-"} · blue hour {sol.blueDawn ?? "-"} / {sol.blueDusk ?? "-"}{sol.tz ? ` (${sol.tz})` : ""}
-                          </div>
-                        </dl>
-                      )}
-                    </li>
-                  );
-                })}
+                {day.stops.map((s, si) => (
+                  <StopCard
+                    key={s.id}
+                    stop={s}
+                    index={si}
+                    count={day.stops.length}
+                    color={color}
+                    timed={timed[si]}
+                    pins={pins}
+                    date={day.date}
+                    onPatch={(patch) => updateStop(di, s.id, patch)}
+                    onMove={(to) => moveStop(di, si, to)}
+                    onRemove={() => removeStop(di, s.id)}
+                    onLocate={() => map?.flyTo({ center: [s.longitude, s.latitude], zoom: Math.max(map.getZoom(), 12), duration: 1000, essential: true })}
+                    onNotice={flash}
+                  />
+                ))}
               </ol>
 
               <div className="mt-2">

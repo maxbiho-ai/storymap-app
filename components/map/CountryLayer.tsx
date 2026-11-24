@@ -24,6 +24,8 @@ export interface CountryPill {
 interface Props {
   /** canonical country → photo count (only countries that have photos light up) */
   counts: Map<string, number>;
+  /** Countries to highlight (default: every country in counts) */
+  visited?: Set<string>;
   /** One floating "Iceland · 397 photos" pill per country, at the middle of its photos */
   pills: CountryPill[];
   /** Active country filter (stays outlined) */
@@ -44,13 +46,13 @@ const fade = (peak: number) => ["interpolate", ["linear"], ["zoom"], FADE_FROM, 
  * out between zoom 4.5 and 6, a hover highlight with a "Romania · 122 photos" tooltip, and floating country pills.
  * The click itself is handled by MapView (it knows about open cards / pick modes).
  */
-export default function CountryLayer({ counts, pills, active, enabled, disabled, light, onPick }: Props) {
+export default function CountryLayer({ counts, visited, pills, active, enabled, disabled, light, onPick }: Props) {
   const { [MAP_ID]: map } = useMap();
   const [hover, setHover] = useState<{ name: string; x: number; y: number } | null>(null);
   const [zoom, setZoom] = useState(2);
   const interactive = enabled && !disabled;
 
-  const names = useMemo(() => [...counts.keys()].flatMap((c) => boundaryNames(c)), [counts]);
+  const names = useMemo(() => [...(visited ?? counts.keys())].flatMap((c) => boundaryNames(c)), [counts, visited]);
   const hasPhotos = useMemo(() => ["in", ["get", "name_en"], ["literal", names.length ? names : ["∅"]]], [names]);
   const hoverNames = useMemo(() => (hover ? boundaryNames(hover.name) : ["∅"]), [hover]);
   const activeNames = useMemo(() => (active ? boundaryNames(active) : ["∅"]), [active]);
@@ -77,7 +79,7 @@ export default function CountryLayer({ counts, pills, active, enabled, disabled,
       if (!m.getLayer(FILL)) return;
       const f = m.queryRenderedFeatures(e.point, { layers: [FILL] })[0];
       const canon = canonicalCountry(f?.properties?.name_en as string | undefined);
-      if (canon && counts.has(canon)) {
+      if (canon && counts.has(canon) && (!visited || visited.has(canon))) {
         m.getCanvas().style.cursor = "pointer";
         setHover((h) => (h && h.name === canon ? { ...h, x: e.point.x, y: e.point.y } : { name: canon, x: e.point.x, y: e.point.y }));
       } else {
@@ -96,7 +98,7 @@ export default function CountryLayer({ counts, pills, active, enabled, disabled,
       m.getCanvas().removeEventListener("mouseleave", onLeave);
       m.getCanvas().style.cursor = "";
     };
-  }, [map, counts, interactive]);
+  }, [map, counts, visited, interactive]);
 
   const n = hover ? counts.get(hover.name) ?? 0 : 0;
   const pillOpacity = zoom >= PILL_HIDE ? 0 : clamp01((PILL_HIDE - zoom) / (PILL_HIDE - FADE_FROM));

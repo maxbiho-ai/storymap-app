@@ -27,7 +27,7 @@ export function loadCountryIndex(): Promise<boolean> {
   loading ??= fetch("/data/countries-50m.json")
     .then((r) => (r.ok ? (r.json() as Promise<Entry[]>) : Promise.reject(new Error(String(r.status)))))
     .then((list) => {
-      entries = list.map((e) => ({ ...e, country: canonicalCountry(e.n) }));
+      entries = list.map((e) => ({ ...e, p: e.p.map((poly) => poly.map(unwrapRing)), country: canonicalCountry(e.n) }));
       return true;
     })
     .catch((err) => {
@@ -36,6 +36,18 @@ export function loadCountryIndex(): Promise<boolean> {
       return false;
     });
   return loading;
+}
+
+/**
+ * Rings that cross the antimeridian (Russia's Chukotka, Fiji, Antarctica) jump from +180 to -180 in the data, which makes the
+ * ray test treat half the world (Iceland!) as inside. Shift their western part to 180..360 so the ring is continuous;
+ * countryAt() then also tests the point shifted by +360°.
+ */
+function unwrapRing(ring: number[]): number[] {
+  let jumps = false;
+  for (let i = 2; i < ring.length; i += 2) if (Math.abs(ring[i] - ring[i - 2]) > 180 * Q) { jumps = true; break; }
+  if (!jumps) return ring;
+  return ring.map((v, i) => (i % 2 === 0 && v < 0 ? v + 360 * Q : v));
 }
 
 function inRing(x: number, y: number, ring: number[]): boolean {
@@ -82,7 +94,7 @@ export function countryAt(lat: number, lng: number): string | null {
   let found: string | null = null;
   for (const e of entries) {
     if (lng < e.b[0] || lng > e.b[2] || lat < e.b[1] || lat > e.b[3]) continue;
-    if (e.p.some((poly) => inPolygon(x, y, poly))) {
+    if (e.p.some((poly) => inPolygon(x, y, poly) || inPolygon(x + 360 * Q, y, poly))) {
       found = e.country;
       break;
     }
@@ -93,9 +105,14 @@ export function countryAt(lat: number, lng: number): string | null {
 }
 
 /**
- * The country of a photo: its coordinates first (point-in-polygon), then the country / region named in its
- * location ("Dolomites" → Italy), then the plain "…, Country" suffix.
+ * The country of a photo. A location name that explicitly ends in a country ("Kazbegi, Georgia") wins: a 1-2 km border error in the
+ * polygons or the GPS must never light up the neighbour. Otherwise its coordinates (point-in-polygon), then a region named in the
+ * location ("Dolomites" → Italy).
  */
 export function resolveCountry(p: { latitude: number; longitude: number; location_name: string | null }): string | null {
-  return countryAt(p.latitude, p.longitude) ?? countryFromRegionHint(p.location_name) ?? countryFromLocation(p.location_name);
+  return countryFromLocation(p.location_name) ?? countryAt(p.latitude, p.longitude) ?? countryFromRegionHint(p.location_name);
 }
+
+/** Tags that mark a photo taken from a plane: such shots must not make a country count as visited on their own */
+const FLIGHT_TAG = /^(airplane|aeroplane|flight|inflight|windowseat|aerialview|aerial|plane)$/;
+export const isFlightPhoto = (tags: string[] | null | undefined) => Boolean(tags?.some((t) => FLIGHT_TAG.test(t.toLowerCase().replace(/[^a-z]/g, ""))));
