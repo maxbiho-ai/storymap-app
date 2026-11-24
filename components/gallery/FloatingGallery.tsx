@@ -67,11 +67,13 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
   const photographer = useMapStore((s) => s.filters.photographer);
   const area = useMapStore((s) => s.filters.area);
   const [open, setOpen] = useState(true);
+  const destinationsOpen = useMapStore((s) => s.destinationsOpen);
+  const setDestinationsOpen = useMapStore((s) => s.setDestinationsOpen);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [more, setMore] = useState<Set<string>>(new Set());
 
   const collapseOnMobile = () => {
-    if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) setOpen(false);
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) setDestinationsOpen(false);
   };
 
   const flyToPhoto = (p: Pin) => {
@@ -126,20 +128,20 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
     <aside
       aria-label={mode === "places" ? "Destinations" : "Photos"}
       className={`pointer-events-auto absolute z-10 flex flex-col overflow-hidden border border-white/10 bg-neutral-950/80 text-neutral-100 shadow-2xl backdrop-blur-xl transition-[height] duration-300
-        inset-x-0 bottom-0 rounded-t-3xl ${open ? "h-[45dvh]" : "h-16"}
+        inset-x-0 bottom-0 h-[50dvh] rounded-t-3xl pb-[env(safe-area-inset-bottom)] ${destinationsOpen ? "" : "max-md:hidden"}
         md:inset-x-auto md:bottom-4 md:start-4 md:top-36 md:h-auto md:w-[340px] md:rounded-3xl ${open ? "" : "md:bottom-auto md:h-14"}`}
     >
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex shrink-0 items-center justify-between gap-2 px-5 py-4 text-start"
+        onClick={() => (window.matchMedia("(max-width: 767px)").matches ? setDestinationsOpen(false) : setOpen((o) => !o))}
+        className="flex min-h-12 shrink-0 items-center justify-between gap-2 px-5 py-4 text-start"
         aria-expanded={open}
       >
         <span className="absolute inset-x-0 top-1.5 mx-auto h-1 w-10 rounded-full bg-white/20 md:hidden" />
         <span className="min-w-0 truncate text-sm font-semibold">{title}</span>
         <span className="flex items-center gap-2">
           {loading && <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-white/70" />}
-          <svg viewBox="0 0 20 20" className={`h-4 w-4 fill-neutral-400 transition-transform ${open ? "" : "rotate-180"}`} aria-hidden>
+          <svg viewBox="0 0 20 20" className={`h-4 w-4 fill-neutral-400 transition-transform ${open ? "max-md:rotate-0" : "rotate-180"}`} aria-hidden>
             <path d="M5.3 7.3a1 1 0 011.4 0L10 10.6l3.3-3.3a1 1 0 111.4 1.4l-4 4a1 1 0 01-1.4 0l-4-4a1 1 0 010-1.4z" />
           </svg>
         </span>
@@ -182,7 +184,7 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
                   return (
                     <li key={c.name} className="rounded-2xl bg-white/[0.03]">
                       <div className="flex items-center gap-1 px-2 py-2">
-                        <button type="button" onClick={() => toggle(c.name)} aria-expanded={isOpen} aria-label={`${isOpen ? "Collapse" : "Expand"} ${c.name}`} className="flex h-6 w-6 items-center justify-center rounded-md text-neutral-400 hover:bg-white/10">
+                        <button type="button" onClick={() => toggle(c.name)} aria-expanded={isOpen} aria-label={`${isOpen ? "Collapse" : "Expand"} ${c.name}`} className="flex h-6 w-6 items-center justify-center rounded-md text-neutral-400 hover:bg-white/10 max-md:h-11 max-md:w-11">
                           <svg viewBox="0 0 20 20" className={`h-3.5 w-3.5 fill-current transition-transform ${isOpen ? "rotate-90" : ""}`} aria-hidden>
                             <path d="M7 4l7 6-7 6z" />
                           </svg>
@@ -194,7 +196,7 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
                             setCountryFilter(c.name);
                             collapseOnMobile();
                           }}
-                          className="min-w-0 flex-1 text-start disabled:cursor-default"
+                          className="min-w-0 flex-1 text-start disabled:cursor-default max-md:min-h-11"
                           title={c.name === "Other places" ? undefined : `Show only ${c.name}`}
                         >
                           <span className="flex items-center justify-between gap-2">
@@ -229,7 +231,7 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
                           ))}
                           {!more.has(c.name) && c.places.length > shown.length && (
                             <li>
-                              <button type="button" onClick={() => setMore((s) => new Set(s).add(c.name))} className="w-full rounded-lg py-1.5 text-xs text-neutral-400 hover:bg-white/5">
+                              <button type="button" onClick={() => setMore((s) => new Set(s).add(c.name))} className="w-full rounded-lg py-1.5 text-xs text-neutral-400 hover:bg-white/5 max-md:min-h-11">
                                 Show {c.places.length - shown.length} more places
                               </button>
                             </li>

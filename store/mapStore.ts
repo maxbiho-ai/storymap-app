@@ -94,6 +94,10 @@ interface MapState {
   commentsFor: string | null;
   openComments: (photoId: string | null) => void;
 
+  /** Mobile: the Destinations / matching-photos half-sheet */
+  destinationsOpen: boolean;
+  setDestinationsOpen: (open: boolean) => void;
+
   /** Visited-country overlay (fill, outline and country pills) */
   countriesOn: boolean;
   setCountriesOn: (on: boolean) => void;
@@ -178,6 +182,9 @@ export const useMapStore = create<MapState>((set) => ({
 
   commentsFor: null,
   openComments: (commentsFor) => set({ commentsFor }),
+
+  destinationsOpen: false,
+  setDestinationsOpen: (destinationsOpen) => set({ destinationsOpen }),
 
   countriesOn: true,
   setCountriesOn: (countriesOn) => set({ countriesOn }),

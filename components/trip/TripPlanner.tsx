@@ -7,14 +7,14 @@ import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { MAP_ID } from "@/components/map/constants";
 import { useTripStore } from "@/store/tripStore";
 import { getAllPins, boundsOf, type Pin } from "@/lib/pins";
-import { BUCKETS, DAY_COLORS, MAX_TRIP_DAYS, dbSuggestions, formatDay, scheduleText, solarFor, uid, type SpotBucket, type SpotSuggestion, type Stop, type TripDay } from "@/lib/trip";
+import { BUCKETS, DAY_COLORS, MAX_TRIP_DAYS, dbSuggestions, formatDay, scheduleText, solarFor, uid, whatsappItinerary, whatsappUrl, type SpotBucket, type SpotSuggestion, type Stop, type TripDay } from "@/lib/trip";
 import { suggestPhotoSpots, type ScoutSpotDto } from "@/lib/aiClient";
 import { deleteTrip, listTrips, loadTrip, saveTrip, type SavedTrip } from "@/lib/tripApi";
 import { googleMapsRouteUrl } from "@/hooks/useCollectionPhotos";
 import type { PlaceSuggestion } from "@/lib/geocode";
 
 const inputCls = "rounded-lg border border-white/10 bg-neutral-900 px-2.5 py-1.5 text-sm text-white outline-none placeholder:text-neutral-500 focus:border-amber-300";
-const smallBtn = "rounded-lg bg-white/10 px-2.5 py-1 text-xs font-medium text-neutral-100 hover:bg-white/20 disabled:opacity-40";
+const smallBtn = "rounded-lg bg-white/10 px-2.5 py-1 max-md:min-h-10 text-xs font-medium text-neutral-100 hover:bg-white/20 disabled:opacity-40";
 
 const SCOUT_LABEL: Record<ScoutSpotDto["phase"], string> = { sunrise: "🌅 Sunrise", sunset: "🌇 Sunset / Golden Hour", midday: "☀️ Midday" };
 
@@ -151,6 +151,19 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
     }
   };
 
+  const copyItinerary = async () => {
+    try {
+      await navigator.clipboard.writeText(whatsappItinerary(trip));
+      flash("ok", "Copied!");
+    } catch {
+      flash("err", "Copy blocked by the browser");
+    }
+  };
+
+  const sendWhatsApp = () => {
+    window.open(whatsappUrl(whatsappItinerary(trip)), "_blank", "noopener,noreferrer");
+  };
+
   const download = () => {
     const blob = new Blob([scheduleText(trip)], { type: "text/plain;charset=utf-8" });
     const a = document.createElement("a");
@@ -165,7 +178,7 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
   return (
     <aside
       aria-label="Plan a Photo Trip"
-      className="pointer-events-auto absolute inset-x-2 top-[7.5rem] z-30 flex max-h-[62dvh] flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/95 text-neutral-100 shadow-2xl backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:top-24 md:max-h-none md:w-[400px]"
+      className="pointer-events-auto absolute inset-x-2 top-[4.5rem] z-30 flex max-h-[70dvh] flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/95 text-neutral-100 shadow-2xl backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:top-24 md:max-h-none md:w-[400px]"
     >
       <div className="flex items-start justify-between gap-2 border-b border-white/10 px-4 py-3">
         <div className="min-w-0 flex-1">
@@ -194,6 +207,27 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
           </label>
         </div>
         {trip.days.length >= MAX_TRIP_DAYS && <p className="text-[11px] text-amber-200/80">Trips are limited to {MAX_TRIP_DAYS} days.</p>}
+
+        {/* Share: WhatsApp-formatted itinerary with one-tap Google Maps links */}
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={sendWhatsApp}
+            disabled={!allStops.length}
+            className="flex min-h-11 items-center justify-center gap-1.5 rounded-xl bg-[#25D366] px-3 text-sm font-semibold text-neutral-950 hover:brightness-110 disabled:opacity-40"
+          >
+            <span aria-hidden>💬</span> Send to WhatsApp
+          </button>
+          <button
+            type="button"
+            onClick={copyItinerary}
+            disabled={!allStops.length}
+            className="flex min-h-11 items-center justify-center gap-1.5 rounded-xl bg-white/10 px-3 text-sm font-semibold text-neutral-100 hover:bg-white/20 disabled:opacity-40"
+          >
+            <span aria-hidden>📋</span> Copy Itinerary
+          </button>
+        </div>
+        {!allStops.length && <p className="-mt-1 text-[11px] text-neutral-500">Add a stop to share the itinerary.</p>}
 
         {/* Save / load / export */}
         <div className="flex flex-wrap gap-1.5">

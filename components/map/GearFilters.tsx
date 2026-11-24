@@ -8,10 +8,11 @@ const LIGHTS: LightKey[] = ["blue", "sunrise", "sunset", "night"];
 const ICON: Record<LightKey, string> = { blue: "🌌", sunrise: "🌅", sunset: "🌇", night: "🌙" };
 
 /** Collapsible "Photo & Light Filters": lighting, long exposure, lens (from the lenses on the map) */
-export default function GearFilters({ lenses }: { lenses: { lens: string; count: number }[] }) {
+export default function GearFilters({ lenses, inline }: { lenses: { lens: string; count: number }[]; /** Mobile popover: the panel is always shown, without its toggle button */ inline?: boolean }) {
   const gear = useMapStore((s) => s.gear);
   const setGear = useMapStore((s) => s.setGear);
-  const [open, setOpen] = useState(false);
+  const [openState, setOpen] = useState(false);
+  const open = inline || openState;
   const ref = useRef<HTMLDivElement>(null);
   const active = gearCount(gear);
 
@@ -28,11 +29,12 @@ export default function GearFilters({ lenses }: { lenses: { lens: string; count:
     `rounded-full border px-2.5 py-1 text-xs transition ${on ? "border-amber-300 bg-amber-300 font-semibold text-neutral-900" : "border-white/15 text-neutral-300 hover:bg-white/10"}`;
 
   return (
-    <div ref={ref} className="relative inline-block">
+    <div ref={ref} className={inline ? "block" : "relative inline-block"}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
+        hidden={inline}
         className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium shadow-lg backdrop-blur ${active ? "bg-amber-300 text-neutral-900" : "bg-neutral-950/80 text-neutral-200 hover:bg-neutral-900"}`}
       >
         <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><path d="M4 6h16M7 12h10M10 18h4" /></svg>
@@ -41,7 +43,7 @@ export default function GearFilters({ lenses }: { lenses: { lens: string; count:
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-30 mt-1.5 w-[min(21rem,calc(100vw-1.5rem))] space-y-3 rounded-2xl border border-white/10 bg-neutral-950/95 p-3 text-neutral-100 shadow-2xl backdrop-blur">
+        <div className={inline ? "space-y-3 text-neutral-100" : "absolute left-0 top-full z-30 mt-1.5 w-[min(21rem,calc(100vw-1.5rem))] space-y-3 rounded-2xl border border-white/10 bg-neutral-950/95 p-3 text-neutral-100 shadow-2xl backdrop-blur"}>
           <section>
             <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Lighting (any of)</h3>
             <div className="flex flex-wrap gap-1.5">

@@ -153,6 +153,7 @@ export default function CountryLayer({ counts, pills, active, enabled, disabled,
             longitude={p.longitude}
             latitude={p.latitude}
             anchor="center"
+            className="max-md:!hidden"
             style={{ zIndex: 3, opacity: pillOpacity, pointerEvents: pillOpacity < 0.3 ? "none" : undefined }}
             onClick={(e) => {
               e.originalEvent.stopPropagation();

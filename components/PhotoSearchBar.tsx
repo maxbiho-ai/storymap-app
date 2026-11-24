@@ -13,6 +13,8 @@ interface Props {
   onChange: (next: Filters) => void;
   resultCount?: number;
   loading?: boolean;
+  /** Mobile: the quick tag chips live in the filter popover instead */
+  hideChips?: boolean;
 }
 
 type Suggestion =
@@ -44,7 +46,7 @@ function namesPlace(text: string, area: GeoArea): boolean {
 }
 
 /** Search: plain text = location name or a place (country / region / city), #tag, @photographer */
-export default function PhotoSearchBar({ value, onChange, resultCount, loading }: Props) {
+export default function PhotoSearchBar({ value, onChange, resultCount, loading, hideChips }: Props) {
   const popularTags = usePopularTags();
   const photographers = usePopularPhotographers();
   const [draft, setDraft] = useState(value.query);
@@ -200,7 +202,7 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading }
             if (e.key === "Escape") inputRef.current?.blur();
           }}
           placeholder={hasFilters ? "Add more…" : "Search a place, country, #tag or @photographer"}
-          className="min-w-[8rem] flex-1 bg-transparent py-1 text-sm outline-none placeholder:text-neutral-400"
+          className="min-w-[8rem] flex-1 bg-transparent py-1 text-sm outline-none placeholder:text-neutral-400 max-md:min-h-10 max-md:text-base"
           aria-label="Search photos"
           aria-autocomplete="list"
           aria-expanded={showSuggestions}
@@ -246,7 +248,7 @@ export default function PhotoSearchBar({ value, onChange, resultCount, loading }
       )}
 
       {/* Quick tag chips + result count */}
-      <div className="mt-2 flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+      <div className={`mt-2 flex items-center gap-1.5 overflow-x-auto pb-1 text-xs ${hideChips ? "hidden" : ""}`}>
         {popularTags.filter((p) => !value.tags.includes(p.tag)).slice(0, 6).map((p) => (
           <button key={p.tag} type="button" onClick={() => onChange({ ...value, tags: [...value.tags, p.tag] })}
             className="shrink-0 rounded-full border border-neutral-200 bg-white/90 px-2.5 py-1 text-neutral-600 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900/90 dark:text-neutral-300">

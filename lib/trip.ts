@@ -233,3 +233,50 @@ export function scheduleText(trip: Trip): string {
   });
   return lines.join("\n").trim();
 }
+
+/* ------------------------------------------------------------------ */
+/* WhatsApp share                                                      */
+/* ------------------------------------------------------------------ */
+
+export const SITE_URL = "https://my-storymap.netlify.app";
+/** Longer than this and the per-stop descriptions are trimmed (stop names and navigation links always stay) */
+export const WHATSAPP_SOFT_LIMIT = 2500;
+
+/**
+ * The itinerary as WhatsApp text (*bold* headers, numbered stops, a Google Maps link per stop).
+ * Detail levels, used in order until it fits `limit`: 0 = stop notes + light windows, 1 = no notes,
+ * 2 = no light windows, 3 = compact (one line per stop, no blank lines). Names and links are never cut.
+ */
+export function whatsappItinerary(trip: Trip, limit = WHATSAPP_SOFT_LIMIT): string {
+  const build = (level: number): string => {
+    const lines: string[] = [`*🗺️ StoryMap Photo Trip: ${trip.name.trim() || "My trip"}*`];
+    if (trip.startDate) lines.push(trip.startDate === trip.endDate ? formatDay(trip.startDate) : `${formatDay(trip.startDate)} → ${formatDay(trip.endDate)}`);
+    const gap = level >= 3 ? [] : [""];
+    trip.days.forEach((day, i) => {
+      if (!day.stops.length) return;
+      lines.push(...gap, `*Day ${i + 1} · ${formatDay(day.date)}*`);
+      day.stops.forEach((s, j) => {
+        const link = `https://maps.google.com/?q=${s.latitude.toFixed(6)},${s.longitude.toFixed(6)}`;
+        if (level >= 3) {
+          lines.push(`${j + 1}. ${s.name} ${link}`);
+          return;
+        }
+        lines.push(`${j + 1}. *${s.name}*`);
+        if (level < 2) {
+          const sol = solarFor(day.date, s.latitude, s.longitude);
+          const parts = [sol.goldenMorning && `🌅 ${sol.goldenMorning.join("–")}`, sol.goldenEvening && `🌇 ${sol.goldenEvening.join("–")}`].filter(Boolean);
+          if (parts.length) lines.push(`   ${parts.join("  ")}`);
+        }
+        if (level < 1 && s.note) lines.push(`   ${s.note}`);
+        lines.push(`   📍 ${link}`);
+      });
+    });
+    lines.push(...gap, `Plan yours: ${SITE_URL}`);
+    return lines.join("\n");
+  };
+  let text = build(0);
+  for (let level = 1; level <= 3 && text.length > limit; level++) text = build(level);
+  return text;
+}
+
+export const whatsappUrl = (text: string) => `https://wa.me/?text=${encodeURIComponent(text)}`;

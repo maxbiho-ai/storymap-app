@@ -20,6 +20,15 @@
   .mapboxgl-ctrl-bottom-right {
     bottom: calc(4.5rem + env(safe-area-inset-bottom));
   }
+  /* Pinch-zoom is the mobile zoom; the +/- buttons only cost thumb space */
+  .mapboxgl-ctrl-group button {
+    width: 44px !important;
+    height: 44px !important;
+  }
+  .mapboxgl-ctrl-zoom-in,
+  .mapboxgl-ctrl-zoom-out {
+    display: none !important;
+  }
 }
 
 /* Like button: a small pop when the heart fills */

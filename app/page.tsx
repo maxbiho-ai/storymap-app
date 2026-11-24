@@ -15,7 +15,7 @@ import { photosLeft, quotaLabel } from "@/lib/beta";
 import InviteGateModal from "@/components/beta/InviteGateModal";
 import AdminPanel from "@/components/admin/AdminPanel";
 import { getSupabase } from "@/lib/supabase/client";
-import { escapeLike } from "@/hooks/usePhotoSearch";
+import { escapeLike, usePopularTags } from "@/hooks/usePhotoSearch";
 import { usePins } from "@/hooks/usePins";
 import { useFullPhotos } from "@/hooks/useFullPhotos";
 import { useMapStore, startViewPrefs } from "@/store/mapStore";
@@ -63,6 +63,9 @@ function StoryMap() {
   const [gateOpen, setGateOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const canUploadNow = access.isAdmin || access.canUpload;
+  // Mobile header popovers
+  const [mobilePanel, setMobilePanel] = useState<null | "filter" | "menu">(null);
+  const popularTags = usePopularTags();
 
   // Saved map view prefs (style, 3D, view mode, countries) are applied once on the client, before the map mounts
   const [prefsReady, setPrefsReady] = useState(false);
@@ -462,26 +465,8 @@ function StoryMap() {
   }, [startPick]);
   const clearPicked = useCallback(() => setPicked(null), [setPicked]);
 
-  return (
-    <main className="relative h-dvh w-full overflow-hidden bg-neutral-950">
-      <div className="absolute inset-0">
-        {prefsReady ? (
-          <MapView pins={pins} groups={groups} selected={selectedPhoto} stack={selectedStack} countryCounts={countryCounts} countryPills={countryPills} route={route} timeline={timeline} />
-        ) : (
-          <div className="h-full w-full animate-pulse bg-neutral-900" />
-        )}
-      </div>
-
-      {/* Top bar */}
-      <header className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start gap-3 p-3 md:p-4 ${pickMode || gpsEdit ? "opacity-0 [&_*]:!pointer-events-none" : ""}`}>
-        <div className="pointer-events-auto hidden shrink-0 rounded-2xl bg-neutral-950/80 px-4 py-2.5 shadow-lg backdrop-blur md:block">
-          <span className="text-sm font-black tracking-[0.25em] text-white">STORY<span className="text-amber-300">MAP</span></span>
-        </div>
-        <div className="pointer-events-auto min-w-0 flex-1">
-          <PhotoSearchBar value={filters} onChange={setFilters} resultCount={pins.length} loading={activeCollection ? listLoading : loading} />
-          <div className="mt-0.5">
-            <GearFilters lenses={lenses} />
-          </div>
+  const filterPills = (
+    <>
           {activeCollection && (
             <div className="mt-1 flex max-w-xl flex-wrap items-center gap-2 rounded-2xl bg-neutral-950/85 px-3 py-2 text-xs text-neutral-200 shadow-lg backdrop-blur">
               <span className="font-semibold text-amber-300" dir="auto">🧭 {activeCollection.name}</span>
@@ -538,6 +523,34 @@ function StoryMap() {
             )}
           </div>
           {error && <p className="mt-1 rounded-lg bg-red-950/80 px-3 py-1 text-xs text-red-200">{error}</p>}
+    </>
+  );
+
+  const activeFilterCount =
+    filters.tags.length + gearCount(gear) + (filters.photographer ? 1 : 0) + (filters.area ? 1 : 0) + (countryFilter ? 1 : 0) + (spotFilter ? 1 : 0);
+
+  return (
+    <main className="relative h-dvh w-full overflow-hidden bg-neutral-950">
+      <div className="absolute inset-0">
+        {prefsReady ? (
+          <MapView pins={pins} groups={groups} selected={selectedPhoto} stack={selectedStack} countryCounts={countryCounts} countryPills={countryPills} route={route} timeline={timeline} />
+        ) : (
+          <div className="h-full w-full animate-pulse bg-neutral-900" />
+        )}
+      </div>
+
+      {/* Top bar */}
+      {isDesktop && (
+      <header className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start gap-3 p-3 md:p-4 ${pickMode || gpsEdit ? "opacity-0 [&_*]:!pointer-events-none" : ""}`}>
+        <div className="pointer-events-auto hidden shrink-0 rounded-2xl bg-neutral-950/80 px-4 py-2.5 shadow-lg backdrop-blur md:block">
+          <span className="text-sm font-black tracking-[0.25em] text-white">STORY<span className="text-amber-300">MAP</span></span>
+        </div>
+        <div className="pointer-events-auto min-w-0 flex-1">
+          <PhotoSearchBar value={filters} onChange={setFilters} resultCount={pins.length} loading={activeCollection ? listLoading : loading} />
+          <div className="mt-0.5">
+            <GearFilters lenses={lenses} />
+          </div>
+          {filterPills}
         </div>
         <button
           type="button"
@@ -567,8 +580,88 @@ function StoryMap() {
           <AuthButton user={user} loading={authLoading} onLogin={() => { setUploadAfterLogin(false); setAuthOpen(true); }} onSignOut={signOut} onAdmin={access.isAdmin ? () => setAdminOpen(true) : undefined} />
         </div>
       </header>
+      )}
 
-      <MapToolbar onFitAll={fitAll} disabled={pickMode || Boolean(gpsEdit)} />
+      {/* Mobile header: one floating search + filter icon + menu icon */}
+      {!isDesktop && (
+        <header className={`pointer-events-none absolute inset-x-0 top-0 z-20 px-2 pt-[max(0.5rem,env(safe-area-inset-top))] ${pickMode || gpsEdit ? "opacity-0 [&_*]:!pointer-events-none" : ""}`}>
+          <div className="flex items-start gap-1.5">
+            <div className="pointer-events-auto min-w-0 flex-1">
+              <PhotoSearchBar value={filters} onChange={setFilters} resultCount={pins.length} loading={activeCollection ? listLoading : loading} hideChips />
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobilePanel((m) => (m === "filter" ? null : "filter"))}
+              aria-label="Filters"
+              aria-expanded={mobilePanel === "filter"}
+              className={`pointer-events-auto relative flex h-[46px] w-11 shrink-0 items-center justify-center rounded-2xl shadow-lg backdrop-blur ${activeFilterCount ? "bg-amber-300 text-neutral-900" : "bg-neutral-950/85 text-white"}`}
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+              {activeFilterCount > 0 && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-neutral-950 px-1 text-[10px] font-bold text-amber-300 ring-2 ring-amber-300">{activeFilterCount}</span>}
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobilePanel((m) => (m === "menu" ? null : "menu"))}
+              aria-label="Menu: upload, trip planner, account"
+              aria-expanded={mobilePanel === "menu"}
+              className="pointer-events-auto flex h-[46px] w-11 shrink-0 items-center justify-center rounded-2xl bg-neutral-950/85 text-lg text-white shadow-lg backdrop-blur"
+            >
+              {user ? <span className="font-bold uppercase text-amber-300">{((user.user_metadata?.full_name as string | undefined) || user.email || "?").charAt(0)}</span> : "☰"}
+            </button>
+          </div>
+          <div className="pointer-events-auto">{filterPills}</div>
+
+          {mobilePanel && (
+            <>
+              <button type="button" aria-label="Close" onClick={() => setMobilePanel(null)} className="pointer-events-auto fixed inset-0 -z-10 cursor-default" />
+              <div className="pointer-events-auto absolute inset-x-2 top-[calc(3.5rem+env(safe-area-inset-top))] max-h-[70dvh] overflow-y-auto rounded-2xl border border-white/10 bg-neutral-950/95 p-3 text-neutral-100 shadow-2xl backdrop-blur">
+                {mobilePanel === "filter" ? (
+                  <div className="space-y-3">
+                    <section>
+                      <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Popular tags</h3>
+                      <div className="flex flex-wrap gap-1.5">
+                        {popularTags.filter((t) => !filters.tags.includes(t.tag)).slice(0, 10).map((t) => (
+                          <button key={t.tag} type="button" onClick={() => setFilters({ ...filters, tags: [...filters.tags, t.tag] })} className="min-h-10 rounded-full border border-white/15 px-3 text-xs text-neutral-200 active:bg-white/10">
+                            #{t.tag}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                    <GearFilters lenses={lenses} inline />
+                    {activeFilterCount > 0 && (
+                      <button type="button" onClick={() => { clearFilters(); setMobilePanel(null); }} className="min-h-11 w-full rounded-xl bg-white/10 text-sm font-semibold">
+                        Clear all filters
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <button type="button" onClick={() => { setMobilePanel(null); toggleUpload(); }} className="flex min-h-11 w-full items-center gap-2 rounded-xl bg-amber-300 px-4 text-sm font-semibold text-neutral-900">
+                      <span className="text-lg leading-none">+</span> Upload photos
+                    </button>
+                    <button type="button" onClick={() => { setMobilePanel(null); toggleTrip(); }} className="flex min-h-11 w-full items-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-semibold">
+                      <span aria-hidden>🧭</span> Plan a Photo Trip
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <ListsMenu />
+                      <NotificationsBell onNavigate={(n) => { setMobilePanel(null); onNotification(n); }} />
+                      <div className="ml-auto">
+                        <AuthButton user={user} loading={authLoading} onLogin={() => { setMobilePanel(null); setUploadAfterLogin(false); setAuthOpen(true); }} onSignOut={signOut} onAdmin={access.isAdmin ? () => { setMobilePanel(null); setAdminOpen(true); } : undefined} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </header>
+      )}
+
+      <MapToolbar
+        onFitAll={fitAll}
+        disabled={pickMode || Boolean(gpsEdit)}
+        destinationsLabel={filtersActive ? `${(countryFilter ?? spotFilter ?? "Results")} · ${pins.length.toLocaleString()} photos` : "Destinations"}
+      />
       <FloatingGallery
         gridPins={gridPins}
         matchCount={pins.length}

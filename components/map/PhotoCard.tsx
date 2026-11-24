@@ -79,7 +79,7 @@ function IconButton({ label, onClick, children, active }: { label: string; onCli
       onClick={onClick}
       aria-label={label}
       title={label}
-      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition ${
+      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition max-md:h-10 max-md:w-10 ${
         active ? "bg-emerald-400/15 text-emerald-300" : "text-neutral-400 hover:bg-white/10 hover:text-white"
       }`}
     >
@@ -132,6 +132,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   );
   const offset = slides.findIndex((s) => s.photoId === photo.id);
 
+  const swipe = useRef<{ x: number; y: number } | null>(null);
   const [idx, setIdx] = useState(0);
   const pendingIdx = useRef<number | null>(null);
   const [lightbox, setLightbox] = useState(false);
@@ -190,7 +191,19 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
 
   return (
     <div className="rounded-2xl bg-neutral-950 text-neutral-100">
-      <div className="relative max-h-[50dvh] overflow-hidden rounded-t-2xl" style={{ aspectRatio: String(Math.max(ratio, 0.8)) }}>
+      <div
+        className="relative max-h-[50dvh] touch-pan-y overflow-hidden rounded-t-2xl max-md:max-h-[34dvh] max-md:rounded-t-none"
+        style={{ aspectRatio: String(Math.max(ratio, 0.8)) }}
+        onTouchStart={(e) => { swipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
+        onTouchEnd={(e) => {
+          const s0 = swipe.current;
+          swipe.current = null;
+          if (!s0 || slides.length < 2) return;
+          const dx = e.changedTouches[0].clientX - s0.x;
+          const dy = e.changedTouches[0].clientY - s0.y;
+          if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) goTo(global + (dx < 0 ? 1 : -1));
+        }}
+      >
         {idx === 0 && (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={photo.thumb_url ?? photo.photo_url} alt="" className="absolute inset-0 h-full w-full scale-105 object-cover blur-sm" />
@@ -218,7 +231,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/55 text-lg leading-none text-white backdrop-blur hover:bg-black/75"
+          className="absolute right-2 top-2 flex h-8 w-8 max-md:h-10 max-md:w-10 items-center justify-center rounded-full bg-black/55 text-lg leading-none text-white backdrop-blur hover:bg-black/75"
         >
           ×
         </button>
@@ -226,9 +239,9 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
         {slides.length > 1 && (
           <>
             <button type="button" onClick={() => goTo(global - 1)} aria-label="Previous photo"
-              className="absolute left-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur hover:bg-black/70">‹</button>
+              className="absolute left-2 top-1/2 flex h-8 w-8 max-md:h-10 max-md:w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur hover:bg-black/70">‹</button>
             <button type="button" onClick={() => goTo(global + 1)} aria-label="Next photo"
-              className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur hover:bg-black/70">›</button>
+              className="absolute right-2 top-1/2 flex h-8 w-8 max-md:h-10 max-md:w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur hover:bg-black/70">›</button>
             {slides.length <= 12 ? (
               <div className="absolute inset-x-0 bottom-2 z-10 flex justify-center gap-1.5">
                 {slides.map((s, i) => (

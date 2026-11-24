@@ -17,7 +17,7 @@ export default function MapStyleSwitcher() {
     <div
       role="radiogroup"
       aria-label="Map style"
-      className="absolute bottom-[11.5rem] right-[10px] z-10 flex flex-col overflow-hidden rounded-lg bg-neutral-950/85 text-[11px] font-semibold shadow-lg backdrop-blur md:bottom-[9.5rem]"
+      className="absolute max-md:hidden bottom-[11.5rem] right-[10px] z-10 flex flex-col overflow-hidden rounded-lg bg-neutral-950/85 text-[11px] font-semibold shadow-lg backdrop-blur md:bottom-[9.5rem]"
     >
       {MODES.map((m) => (
         <button
