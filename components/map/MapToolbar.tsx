@@ -15,6 +15,9 @@ export default function MapToolbar({ onFitAll, disabled }: { onFitAll: () => voi
   const exactGps = useMapStore((s) => s.exactGps);
   const setExactGps = useMapStore((s) => s.setExactGps);
 
+  const countriesOn = useMapStore((s) => s.countriesOn);
+  const setCountriesOn = useMapStore((s) => s.setCountriesOn);
+
   if (disabled) return null;
   return (
     <div
@@ -37,6 +40,15 @@ export default function MapToolbar({ onFitAll, disabled }: { onFitAll: () => voi
           </button>
         ))}
       </div>
+      <button
+        type="button"
+        onClick={() => setCountriesOn(!countriesOn)}
+        aria-pressed={countriesOn}
+        title="Visited-country highlight and country pills (they fade out as you zoom in)"
+        className={`rounded-2xl px-3 py-2 text-xs font-semibold shadow-lg ring-1 ring-white/10 backdrop-blur transition ${countriesOn ? "bg-amber-300 text-neutral-900" : "bg-neutral-950/85 text-neutral-100 hover:bg-neutral-800"}`}
+      >
+        🌍 Countries
+      </button>
       <button
         type="button"
         onClick={onFitAll}

@@ -4,11 +4,12 @@ import { useMapStore, type MapMode } from "@/store/mapStore";
 
 const MODES: { key: MapMode; label: string; hint: string }[] = [
   { key: "dark", label: "Dark", hint: "Dark map" },
+  { key: "streets", label: "Streets", hint: "Road map with route numbers and place names" },
   { key: "satellite", label: "Satellite", hint: "Satellite with labels" },
   { key: "terrain", label: "3D", hint: "Satellite with 3D terrain" },
 ];
 
-/** Map HUD: Dark / Satellite hybrid / 3D terrain */
+/** Map HUD: Dark / Streets / Satellite hybrid / 3D terrain */
 export default function MapStyleSwitcher() {
   const mode = useMapStore((s) => s.mapMode);
   const setMode = useMapStore((s) => s.setMapMode);

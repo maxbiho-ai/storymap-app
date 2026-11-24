@@ -24,6 +24,30 @@ const ALIASES: Record<string, string> = {
   "state of palestine": "Palestine", "palestinian territories": "Palestine", "bosnia & herzegovina": "Bosnia and Herzegovina",
   "bosnia": "Bosnia and Herzegovina", "trinidad & tobago": "Trinidad and Tobago", "sao tome & principe": "Sao Tome and Principe",
   "vatican": "Vatican City", "holy see": "Vatican City", "myanmar (burma)": "Myanmar", "south georgia": "United Kingdom",
+  // Natural Earth spellings used by the bundled polygons (lib/countryGeo.ts)
+  "dem. rep. congo": "Democratic Republic of the Congo", "central african rep.": "Central African Republic",
+  "dominican rep.": "Dominican Republic", "eq. guinea": "Equatorial Guinea", "s. sudan": "South Sudan",
+  "bosnia and herz.": "Bosnia and Herzegovina", "solomon is.": "Solomon Islands", "marshall is.": "Marshall Islands",
+  "antigua and barb.": "Antigua and Barbuda", "st. kitts and nevis": "Saint Kitts and Nevis",
+  "st. vin. and gren.": "Saint Vincent and the Grenadines", "faeroe is.": "Faroe Islands", "n. cyprus": "Cyprus",
+  somaliland: "Somalia", "w. sahara": "Morocco",
+};
+
+/**
+ * Well-known regions that never carry their country in the name ("Dolomites" → Italy). Only used as a fallback when
+ * the photo's coordinates fall outside every country polygon.
+ */
+const REGIONS: Record<string, string> = {
+  dolomites: "Italy", dolomiti: "Italy", tuscany: "Italy", toscana: "Italy", sicily: "Italy", sicilia: "Italy", sardinia: "Italy",
+  lombardy: "Italy", veneto: "Italy", trentino: "Italy", "south tyrol": "Italy", "alto adige": "Italy", "aosta valley": "Italy",
+  liguria: "Italy", puglia: "Italy", apulia: "Italy", umbria: "Italy", amalfi: "Italy", "cinque terre": "Italy",
+  bavaria: "Germany", bayern: "Germany", "black forest": "Germany",
+  andalusia: "Spain", andalucia: "Spain", catalonia: "Spain", mallorca: "Spain", majorca: "Spain", "canary islands": "Spain", tenerife: "Spain",
+  provence: "France", normandy: "France", brittany: "France", corsica: "France", chamonix: "France",
+  patagonia: "Argentina", lofoten: "Norway", svalbard: "Norway", tromso: "Norway", "scottish highlands": "United Kingdom",
+  "isle of skye": "United Kingdom", "lake district": "United Kingdom", cornwall: "United Kingdom",
+  santorini: "Greece", crete: "Greece", transylvania: "Romania", algarve: "Portugal", madeira: "Portugal", azores: "Portugal",
+  hokkaido: "Japan", kyoto: "Japan", yosemite: "United States", hawaii: "United States", alaska: "United States",
 };
 
 export const norm = (s: string) =>
@@ -44,6 +68,19 @@ export function countryFromLocation(locationName: string | null | undefined): st
   if (!locationName) return null;
   const parts = locationName.split(",");
   return canonicalCountry(parts[parts.length - 1]);
+}
+
+/** Last resort for a photo outside every country polygon: a country, or a well-known region, named anywhere in the location */
+export function countryFromRegionHint(locationName: string | null | undefined): string | null {
+  if (!locationName) return null;
+  const parts = locationName.split(",").map(norm);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const c = BY_KEY.get(parts[i]) ?? REGIONS[parts[i]];
+    if (c) return c;
+  }
+  const all = norm(locationName);
+  for (const [region, c] of Object.entries(REGIONS)) if (new RegExp(`\\b${region}\\b`).test(all)) return c;
+  return null;
 }
 
 /** Every spelling the boundary layer may use for this canonical country (for the highlight filter) */

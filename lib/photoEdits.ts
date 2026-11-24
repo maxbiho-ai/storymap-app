@@ -12,12 +12,7 @@ export type OwnerPatch = Partial<Pick<Photo, "location_name" | "latitude" | "lon
  * On success the edit is merged into the map state at once (the pin moves / the name changes).
  */
 export async function updateOwnPhoto(id: string, patch: OwnerPatch): Promise<Photo> {
-  if (patch.latitude != null && (!Number.isFinite(patch.latitude) || Math.abs(patch.latitude) > 90)) throw new Error("Invalid latitude");
-  if (patch.longitude != null && (!Number.isFinite(patch.longitude) || Math.abs(patch.longitude) > 180)) throw new Error("Invalid longitude");
-  if (patch.location_name != null) patch = { ...patch, location_name: patch.location_name.trim() || null };
-  for (const k of ["access_info", "permit_info"] as const) {
-    if (patch[k] !== undefined) patch = { ...patch, [k]: patch[k]?.trim().slice(0, 600) || null };
-  }
+  patch = cleanPatch(patch);
 
   const { data, error } = await getSupabase().from("photos").update(patch).eq("id", id).select("*").maybeSingle();
   if (error) throw new Error(error.message);
@@ -25,6 +20,27 @@ export async function updateOwnPhoto(id: string, patch: OwnerPatch): Promise<Pho
 
   useMapStore.getState().applyEdit(id, patch);
   return data as Photo;
+}
+
+/** The same edit on several photos at once (RLS only lets the owner's rows through); returns the ids that changed */
+export async function updateOwnPhotos(ids: string[], patch: OwnerPatch): Promise<string[]> {
+  patch = cleanPatch(patch);
+  const { data, error } = await getSupabase().from("photos").update(patch).in("id", ids).select("id");
+  if (error) throw new Error(error.message);
+  const done = (data ?? []).map((r) => r.id as string);
+  if (!done.length) throw new Error("You can only edit your own photos (are you still signed in?)");
+  for (const id of done) useMapStore.getState().applyEdit(id, patch);
+  return done;
+}
+
+function cleanPatch(patch: OwnerPatch): OwnerPatch {
+  if (patch.latitude != null && (!Number.isFinite(patch.latitude) || Math.abs(patch.latitude) > 90)) throw new Error("Invalid latitude");
+  if (patch.longitude != null && (!Number.isFinite(patch.longitude) || Math.abs(patch.longitude) > 180)) throw new Error("Invalid longitude");
+  if (patch.location_name != null) patch = { ...patch, location_name: patch.location_name.trim() || null };
+  for (const k of ["access_info", "permit_info"] as const) {
+    if (patch[k] !== undefined) patch = { ...patch, [k]: patch[k]?.trim().slice(0, 600) || null };
+  }
+  return patch;
 }
 
 /** Clipboard with a fallback for non-secure contexts */

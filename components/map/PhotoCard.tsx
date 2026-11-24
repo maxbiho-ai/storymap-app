@@ -15,6 +15,7 @@ import CommentsSection from "@/components/social/CommentsSection";
 import DeleteDialog from "@/components/social/DeleteDialog";
 import FieldNotes from "./FieldNotes";
 import LightPlanner from "./LightPlanner";
+import GpsInlineEditor from "./GpsInlineEditor";
 import { streetViewUrl } from "@/lib/walk";
 
 function exposureLine(p: Photo): string {
@@ -101,7 +102,6 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   const exactGps = useMapStore((s) => s.exactGps);
   const setExactGps = useMapStore((s) => s.setExactGps);
   const currentUserId = useMapStore((s) => s.currentUserId);
-  const startGpsEdit = useMapStore((s) => s.startGpsEdit);
   const walk = useMapStore((s) => s.walk);
   const startWalk = useMapStore((s) => s.startWalk);
   const endWalk = useMapStore((s) => s.endWalk);
@@ -138,6 +138,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   const [tipBelow, setTipBelow] = useState(false);
   const [copied, setCopied] = useState<"loc" | "gps" | null>(null);
   const [editLoc, setEditLoc] = useState(false);
+  const [editGps, setEditGps] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // Opened from a notification: show the thread with the composer focused
@@ -155,6 +156,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
     pendingIdx.current = null;
     setInfoOpen(false);
     setEditLoc(false);
+    setEditGps(false);
     setCommentsOpen(false);
     setDeleting(false);
   }, [photo.id]);
@@ -343,12 +345,13 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
             {Icon.street}
           </IconButton>
           {isOwner && (
-            <IconButton label="Edit GPS on the map" onClick={() => startGpsEdit(photo.id, { latitude: photo.latitude, longitude: photo.longitude })}>
+            <IconButton label={editGps ? "Close GPS editor" : "Edit GPS"} onClick={() => setEditGps((o) => !o)} active={editGps}>
               {Icon.pencil}
             </IconButton>
           )}
           {copied === "gps" && <span className="text-[10px] text-emerald-300">Copied</span>}
         </div>
+        {isOwner && editGps && <GpsInlineEditor photo={photo} stack={stack} onDone={() => setEditGps(false)} />}
 
         {(stack.length > 1 || exactGps) && (
           <button

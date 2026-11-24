@@ -15,7 +15,7 @@ import PickModeBanner from "./PickModeBanner";
 import GpsEditBanner from "./GpsEditBanner";
 import SunCompass from "./SunCompass";
 import MapStyleSwitcher from "./MapStyleSwitcher";
-import CountryLayer from "./CountryLayer";
+import CountryLayer, { type CountryPill } from "./CountryLayer";
 import TripLayer from "@/components/trip/TripLayer";
 import { destination } from "@/lib/sunMoon";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
@@ -35,6 +35,8 @@ interface Props {
   stack: Photo[];
   /** canonical country → photo count */
   countryCounts: Map<string, number>;
+  /** Floating country summary pills */
+  countryPills: CountryPill[];
   mapStyle?: string;
   /** Trip list view: [lng, lat] points joined by a route line, in list order */
   route?: [number, number][];
@@ -49,6 +51,7 @@ function readBounds(e: { target: mapboxgl.Map }): Bounds {
 
 const STYLES = {
   dark: "mapbox://styles/mapbox/dark-v11",
+  streets: "mapbox://styles/mapbox/streets-v12",
   satellite: "mapbox://styles/mapbox/satellite-streets-v12",
   terrain: "mapbox://styles/mapbox/satellite-streets-v12",
 } as const;
@@ -60,7 +63,7 @@ const CARD_W = 340;
 
 const lineFc = (coordinates: [number, number][]) => ({ type: "Feature" as const, properties: {}, geometry: { type: "LineString" as const, coordinates } });
 
-export default function MapView({ pins, groups, selected, stack, countryCounts, mapStyle, route, timeline }: Props) {
+export default function MapView({ pins, groups, selected, stack, countryCounts, countryPills, mapStyle, route, timeline }: Props) {
   const { [MAP_ID]: map } = useMap();
   const bounds = useMapStore((s) => s.bounds);
   const setViewport = useMapStore((s) => s.setViewport);
@@ -73,6 +76,10 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
   const pickedLocation = useMapStore((s) => s.pickedLocation);
   const setPicked = useMapStore((s) => s.setPicked);
   const cancelPick = useMapStore((s) => s.cancelPick);
+  const gpsPick = useMapStore((s) => s.gpsPick);
+  const setGpsPickPoint = useMapStore((s) => s.setGpsPickPoint);
+  const endGpsPick = useMapStore((s) => s.endGpsPick);
+  const countriesOn = useMapStore((s) => s.countriesOn);
   const gpsEdit = useMapStore((s) => s.gpsEdit);
   const setGpsEditPoint = useMapStore((s) => s.setGpsEditPoint);
   const cancelGpsEdit = useMapStore((s) => s.cancelGpsEdit);
@@ -139,18 +146,20 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
 
   const onClick = useCallback(
     (e: MapLayerMouseEvent) => {
+      // Inline GPS editor "Pick on Map": the card stays open, the click fills its coordinate field
+      if (gpsPick) return setGpsPickPoint({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
       if (gpsEdit) return setGpsEditPoint({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
       if (pickMode) return setPicked({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
       // An open card closes first; the next click on a country filters by it
       if (selectedId) return select(null);
       const m = e.target;
-      if (m.getLayer("country-fill")) {
+      if (countriesOn && m.getLayer("country-fill")) {
         const f = m.queryRenderedFeatures(e.point, { layers: ["country-fill"] })[0];
         const canon = canonicalCountry(f?.properties?.name_en as string | undefined);
         if (canon && countryCounts.has(canon)) setCountryFilter(canon);
       }
     },
-    [gpsEdit, setGpsEditPoint, pickMode, setPicked, select, selectedId, countryCounts, setCountryFilter],
+    [gpsPick, setGpsPickPoint, countriesOn, gpsEdit, setGpsEditPoint, pickMode, setPicked, select, selectedId, countryCounts, setCountryFilter],
   );
 
   /** A cluster: a compact one opens the carousel (1 of N, with arrows); a big / spread one zooms in */
@@ -178,13 +187,14 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape") return;
-      if (gpsEdit) cancelGpsEdit();
+      if (gpsPick) endGpsPick();
+      else if (gpsEdit) cancelGpsEdit();
       else if (pickMode) cancelPick();
       else select(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [gpsEdit, cancelGpsEdit, pickMode, cancelPick, select]);
+  }, [gpsPick, endGpsPick, gpsEdit, cancelGpsEdit, pickMode, cancelPick, select]);
 
   // Edit GPS: bring the photo into view
   const editPhotoId = gpsEdit?.photoId;
@@ -393,7 +403,7 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
       initialViewState={{ longitude: 34.85, latitude: 31.5, zoom: 2 }}
       style={{ width: "100%", height: "100%" }}
       projection={{ name: "globe" }}
-      cursor={busy ? "crosshair" : undefined}
+      cursor={busy || gpsPick ? "crosshair" : undefined}
       onLoad={(e) => setViewport(readBounds(e), e.target.getZoom())}
       onMove={onMove}
       onMoveEnd={onMoveEnd}
@@ -411,7 +421,7 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
       )}
 
       {/* Countries with photos: hover highlight + tooltip, click filters */}
-      <CountryLayer counts={countryCounts} active={countryFilter} disabled={busy} />
+      <CountryLayer counts={countryCounts} pills={countryPills} active={countryFilter} enabled={countriesOn} light={mapMode === "streets"} disabled={busy} onPick={setCountryFilter} />
 
       {/* Heatmap view: photo density hotspots (dots take over once zoomed in) */}
       {heatData && (
@@ -549,6 +559,16 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
             onSaved={(p) => select(p.id)}
           />
         </>
+      )}
+
+      {/* Inline GPS editor: the point picked on the map */}
+      {gpsPick?.point && (
+        <Marker longitude={gpsPick.point.longitude} latitude={gpsPick.point.latitude} anchor="bottom" style={{ zIndex: 46, pointerEvents: "none" }}>
+          <svg width="30" height="40" viewBox="0 0 34 44" className="drop-shadow-lg" aria-label="New GPS position">
+            <path d="M17 43C17 43 33 27 33 17A16 16 0 001 17c0 10 16 26 16 26z" fill="#38bdf8" stroke="white" strokeWidth="2.5" />
+            <circle cx="17" cy="17" r="6" fill="#0c4a6e" />
+          </svg>
+        </Marker>
       )}
 
       {/* מיקום שנבחר ידנית — ניתן לגרירה לכוונון */}

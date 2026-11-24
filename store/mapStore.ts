@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { EMPTY_FILTERS, type Photo, type PhotoFilters } from "@/types/photo";
 import { EMPTY_GEAR, type GearFilters } from "@/lib/gear";
 
-export type MapMode = "dark" | "satellite" | "terrain";
+export type MapMode = "dark" | "streets" | "satellite" | "terrain";
 /** Pins / Dots (default), stacked Thumbnails, or a density Heatmap */
 export type ViewMode = "dots" | "thumbs" | "heat";
 export const DEFAULT_WALK_RADIUS_KM = 15;
@@ -66,6 +66,12 @@ interface MapState {
   currentUserId: string | null;
   setCurrentUser: (id: string | null) => void;
 
+  /** Inline GPS editor "Pick on Map": the next map click fills the card's coordinate field */
+  gpsPick: { photoId: string; point: LatLng | null } | null;
+  startGpsPick: (photoId: string) => void;
+  setGpsPickPoint: (point: LatLng | null) => void;
+  endGpsPick: () => void;
+
   /** Owner "Edit GPS" mode: a draggable marker on the map for one photo */
   gpsEdit: { photoId: string; point: LatLng; original: LatLng } | null;
   startGpsEdit: (photoId: string, original: LatLng) => void;
@@ -88,7 +94,11 @@ interface MapState {
   commentsFor: string | null;
   openComments: (photoId: string | null) => void;
 
-  /** Base map: dark vector, satellite hybrid, or satellite + 3D terrain */
+  /** Visited-country overlay (fill, outline and country pills) */
+  countriesOn: boolean;
+  setCountriesOn: (on: boolean) => void;
+
+  /** Base map: dark vector, streets, satellite hybrid, or satellite + 3D terrain */
   mapMode: MapMode;
   setMapMode: (m: MapMode) => void;
 
@@ -146,6 +156,11 @@ export const useMapStore = create<MapState>((set) => ({
   currentUserId: null,
   setCurrentUser: (currentUserId) => set({ currentUserId }),
 
+  gpsPick: null,
+  startGpsPick: (photoId) => set({ gpsPick: { photoId, point: null } }),
+  setGpsPickPoint: (point) => set((s) => (s.gpsPick ? { gpsPick: { ...s.gpsPick, point } } : {})),
+  endGpsPick: () => set({ gpsPick: null }),
+
   gpsEdit: null,
   startGpsEdit: (photoId, original) => set({ gpsEdit: { photoId, original, point: original }, pickMode: false }),
   setGpsEditPoint: (point) => set((s) => (s.gpsEdit ? { gpsEdit: { ...s.gpsEdit, point } } : {})),
@@ -164,6 +179,9 @@ export const useMapStore = create<MapState>((set) => ({
   commentsFor: null,
   openComments: (commentsFor) => set({ commentsFor }),
 
+  countriesOn: true,
+  setCountriesOn: (countriesOn) => set({ countriesOn }),
+
   mapMode: "dark",
   setMapMode: (mapMode) => set({ mapMode }),
 
@@ -180,6 +198,48 @@ export const useMapStore = create<MapState>((set) => ({
   loginRequest: 0,
   requestLogin: () => set((s) => ({ loginRequest: s.loginRequest + 1 })),
 }));
+
+/* ------------------------------------------------------------------ */
+/* Persisted map view preferences (localStorage)                       */
+/* ------------------------------------------------------------------ */
+
+const PREFS_KEY = "storymap:view-prefs:v1";
+const MAP_MODES: readonly MapMode[] = ["dark", "streets", "satellite", "terrain"];
+const VIEW_MODES: readonly ViewMode[] = ["dots", "thumbs", "heat"];
+
+interface ViewPrefs { mapMode: MapMode; viewMode: ViewMode; countriesOn: boolean }
+
+/** Reads and validates the saved prefs; anything missing or invalid falls back to the defaults field by field */
+function readPrefs(): Partial<ViewPrefs> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "null") as Record<string, unknown> | null;
+    if (!raw || typeof raw !== "object") return {};
+    const out: Partial<ViewPrefs> = {};
+    if (MAP_MODES.includes(raw.mapMode as MapMode)) out.mapMode = raw.mapMode as MapMode;
+    if (VIEW_MODES.includes(raw.viewMode as ViewMode)) out.viewMode = raw.viewMode as ViewMode;
+    if (typeof raw.countriesOn === "boolean") out.countriesOn = raw.countriesOn;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+let prefsStarted = false;
+
+/** Browser only, once: applies the saved prefs to the store, then saves every later change */
+export function startViewPrefs(): void {
+  if (prefsStarted || typeof window === "undefined") return;
+  prefsStarted = true;
+  useMapStore.setState(readPrefs());
+  useMapStore.subscribe((s, prev) => {
+    if (s.mapMode === prev.mapMode && s.viewMode === prev.viewMode && s.countriesOn === prev.countriesOn) return;
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ mapMode: s.mapMode, viewMode: s.viewMode, countriesOn: s.countriesOn } satisfies ViewPrefs));
+    } catch {
+      /* storage full / blocked: the prefs just aren't remembered */
+    }
+  });
+}
 
 /** Is a point inside bounds (handles maps crossing the date line) */
 export function inBounds(b: Bounds, lat: number, lng: number): boolean {

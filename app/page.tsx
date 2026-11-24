@@ -14,7 +14,9 @@ import { getSupabase } from "@/lib/supabase/client";
 import { escapeLike } from "@/hooks/usePhotoSearch";
 import { usePins } from "@/hooks/usePins";
 import { useFullPhotos } from "@/hooks/useFullPhotos";
-import { useMapStore } from "@/store/mapStore";
+import { useMapStore, startViewPrefs } from "@/store/mapStore";
+import { loadCountryIndex, resolveCountry } from "@/lib/countryGeo";
+import type { CountryPill } from "@/components/map/CountryLayer";
 import { boundsOf, groupPins, summarizePlaces, timelineCoords, toPin, type Pin } from "@/lib/pins";
 import { MAP_ID } from "@/components/map/constants";
 import ListsMenu from "@/components/social/ListsMenu";
@@ -52,6 +54,20 @@ function StoryMap() {
   // Guest clicked "Upload": open the uploader right after login
   const [uploadAfterLogin, setUploadAfterLogin] = useState(false);
   const [profileName, setProfileName] = useState("");
+
+  // Saved map view prefs (style, 3D, view mode, countries) are applied once on the client, before the map mounts
+  const [prefsReady, setPrefsReady] = useState(false);
+  useEffect(() => {
+    startViewPrefs();
+    setPrefsReady(true);
+  }, []);
+  // Country polygons: every photo's country comes from its coordinates (point-in-polygon), names are the fallback
+  const [geoReady, setGeoReady] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void loadCountryIndex().then((ok) => alive && ok && setGeoReady(true));
+    return () => { alive = false; };
+  }, []);
 
   const filters = useMapStore((s) => s.filters);
   const setFilters = useMapStore((s) => s.setFilters);
@@ -106,8 +122,15 @@ function StoryMap() {
       base = [...base, ...[walk.origin, ...walkStops].filter((p) => !have.has(p.id)).map(toPin)];
     }
     if (Object.keys(deleted).length) base = base.filter((p) => !deleted[p.id]);
-    return Object.keys(edits).length ? base.map((p) => (edits[p.id] ? toPin({ ...p, ...edits[p.id] }) : p)) : base;
-  }, [activeCollection, listPhotos, loadedPins, filters, gear, walk, walkStops, edits, deleted]);
+    if (Object.keys(edits).length) base = base.map((p) => (edits[p.id] ? toPin({ ...p, ...edits[p.id] }) : p));
+    if (geoReady) {
+      base = base.map((p) => {
+        const country = resolveCountry(p);
+        return country === p.country ? p : { ...p, country };
+      });
+    }
+    return base;
+  }, [activeCollection, listPhotos, loadedPins, filters, gear, walk, walkStops, edits, deleted, geoReady]);
 
   const pins = useMemo(() => {
     if (!countryFilter && !spotFilter) return pinsBase;
@@ -118,6 +141,31 @@ function StoryMap() {
     const m = new Map<string, number>();
     for (const p of pinsBase) if (p.country) m.set(p.country, (m.get(p.country) ?? 0) + 1);
     return m;
+  }, [pinsBase]);
+
+  // One pill per visited country, on the photo nearest to the middle of that country's photos
+  const countryPills = useMemo<CountryPill[]>(() => {
+    const acc = new Map<string, { n: number; lat: number; lng: number; pins: Pin[] }>();
+    for (const p of pinsBase) {
+      if (!p.country) continue;
+      const a = acc.get(p.country) ?? { n: 0, lat: 0, lng: 0, pins: [] };
+      a.n++;
+      a.lat += p.latitude;
+      a.lng += p.longitude;
+      if (a.pins.length < 400) a.pins.push(p);
+      acc.set(p.country, a);
+    }
+    return [...acc].map(([name, a]) => {
+      const mLat = a.lat / a.n;
+      const mLng = a.lng / a.n;
+      let best = a.pins[0];
+      let bd = Infinity;
+      for (const p of a.pins) {
+        const d = (p.latitude - mLat) ** 2 + (p.longitude - mLng) ** 2;
+        if (d < bd) { bd = d; best = p; }
+      }
+      return { name, count: a.n, latitude: best.latitude, longitude: best.longitude };
+    });
   }, [pinsBase]);
 
   // Sidebar: destinations until something filters, then the photo grid (newest 500)
@@ -394,7 +442,11 @@ function StoryMap() {
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-neutral-950">
       <div className="absolute inset-0">
-        <MapView pins={pins} groups={groups} selected={selectedPhoto} stack={selectedStack} countryCounts={countryCounts} route={route} timeline={timeline} />
+        {prefsReady ? (
+          <MapView pins={pins} groups={groups} selected={selectedPhoto} stack={selectedStack} countryCounts={countryCounts} countryPills={countryPills} route={route} timeline={timeline} />
+        ) : (
+          <div className="h-full w-full animate-pulse bg-neutral-900" />
+        )}
       </div>
 
       {/* Top bar */}
