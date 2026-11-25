@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRoutesStore } from "@/store/routesStore";
-import { listReadyRoutes } from "@/lib/readyRoutesApi";
+import { deleteReadyRoute, listAllReadyRoutes, listReadyRoutes } from "@/lib/readyRoutesApi";
+import { useMapStore } from "@/store/mapStore";
 import { LIGHT_ICON, LIGHT_PHASES, allStops, fmtKm, routeDistanceKm, type CuratedRoute } from "@/lib/readyRoutes";
 import RouteLine from "./RouteLine";
 
@@ -14,12 +15,34 @@ export default function ReadyRoutesGallery() {
   const [routes, setRoutes] = useState<CuratedRoute[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [country, setCountry] = useState<string | null>(null);
+  const isAdmin = useRoutesStore((s) => s.isAdmin);
+  const version = useRoutesStore((s) => s.version);
+  const openEditor = useRoutesStore((s) => s.openEditor);
+  const active = useRoutesStore((s) => s.active);
+  const closeRoute = useRoutesStore((s) => s.closeRoute);
+  const bump = useRoutesStore((s) => s.bump);
+  const pickMode = useMapStore((s) => s.pickMode);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const remove = async (r: CuratedRoute) => {
+    if (!window.confirm(`Delete "${r.title}" from Ready Routes?\n\nIts link (?route=${r.slug}) stops working. This can't be undone.`)) return;
+    setBusyId(r.id);
+    try {
+      await deleteReadyRoute(r.id);
+      if (active?.id === r.id) closeRoute();
+      bump();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Could not delete the route");
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
     let alive = true;
     setError(null);
-    listReadyRoutes()
+    (isAdmin ? listAllReadyRoutes() : listReadyRoutes())
       .then((r) => alive && setRoutes(r))
       .catch((e) => alive && setError(e instanceof Error ? e.message : "Could not load routes"));
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
@@ -28,12 +51,12 @@ export default function ReadyRoutesGallery() {
       alive = false;
       window.removeEventListener("keydown", onKey);
     };
-  }, [open, setOpen]);
+  }, [open, setOpen, isAdmin, version]);
 
   const countries = useMemo(() => [...new Set((routes ?? []).map((r) => r.country).filter(Boolean) as string[])].sort(), [routes]);
   const shown = (routes ?? []).filter((r) => !country || r.country === country);
 
-  if (!open) return null;
+  if (!open || pickMode) return null;
   return (
     <div role="dialog" aria-modal="true" aria-labelledby="ready-routes-title" className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 backdrop-blur-sm md:items-center md:p-6" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
       <div className="flex max-h-[92dvh] w-full max-w-5xl flex-col overflow-hidden rounded-t-3xl border border-white/10 bg-neutral-950 text-neutral-100 shadow-2xl md:rounded-3xl">
@@ -42,7 +65,12 @@ export default function ReadyRoutesGallery() {
             <h2 id="ready-routes-title" className="text-lg font-semibold">🗺️ Ready Routes</h2>
             <p className="text-xs text-neutral-400">Curated multi-day photography itineraries, built from real geotagged shots. Open one to see it on the map.</p>
           </div>
-          <button type="button" onClick={() => setOpen(false)} aria-label="Close Ready Routes" className="ml-auto text-2xl leading-none text-neutral-400 hover:text-white">×</button>
+          {isAdmin && (
+            <button type="button" onClick={() => openEditor(null)} className="ml-auto shrink-0 rounded-lg bg-sky-300 px-3 py-1.5 text-xs font-semibold text-neutral-900 hover:bg-sky-200" title="Admin: create a route or upload a .gpx / .kml / .json file">
+              + Upload Route
+            </button>
+          )}
+          <button type="button" onClick={() => setOpen(false)} aria-label="Close Ready Routes" className={`${isAdmin ? "" : "ml-auto "}text-2xl leading-none text-neutral-400 hover:text-white`}>×</button>
         </div>
 
         {countries.length > 1 && (
@@ -68,7 +96,11 @@ export default function ReadyRoutesGallery() {
             <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {shown.map((r) => (
                 <li key={r.id}>
-                  <RouteCard route={r} onOpen={() => openRoute(r)} />
+                  <RouteCard
+                    route={r}
+                    onOpen={() => openRoute(r)}
+                    admin={isAdmin ? { busy: busyId === r.id, onEdit: () => openEditor(structuredClone(r)), onDelete: () => void remove(r) } : undefined}
+                  />
                 </li>
               ))}
             </ul>
@@ -79,11 +111,18 @@ export default function ReadyRoutesGallery() {
   );
 }
 
-function RouteCard({ route: r, onOpen }: { route: CuratedRoute; onOpen: () => void }) {
+interface AdminActions {
+  busy: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}
+
+function RouteCard({ route: r, onOpen, admin }: { route: CuratedRoute; onOpen: () => void; admin?: AdminActions }) {
   const stops = allStops(r);
   const phases = LIGHT_PHASES.map((p) => ({ p, n: stops.filter((s) => s.light === p).length })).filter((x) => x.n);
   const km = routeDistanceKm(r);
   return (
+    <div className="relative h-full">
     <button type="button" onClick={onOpen} className="group flex h-full w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] text-start transition hover:border-amber-300/50 hover:bg-white/[0.06]">
       <div className="relative aspect-[16/10] w-full overflow-hidden bg-neutral-800">
         {r.cover_url && (
@@ -113,5 +152,17 @@ function RouteCard({ route: r, onOpen }: { route: CuratedRoute; onOpen: () => vo
         )}
       </div>
     </button>
+    {(admin || !r.published) && (
+      <div className="absolute left-2 top-2 flex gap-1">
+        {!r.published && <span className="rounded-md bg-neutral-900/85 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-neutral-300">Draft</span>}
+        {admin && (
+          <>
+            <button type="button" onClick={admin.onEdit} className="rounded-md bg-black/70 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-sky-500/80">Edit</button>
+            <button type="button" onClick={admin.onDelete} disabled={admin.busy} className="rounded-md bg-black/70 px-2 py-1 text-[11px] font-semibold text-red-200 backdrop-blur-sm hover:bg-red-600/80 disabled:opacity-50">{admin.busy ? "…" : "Delete"}</button>
+          </>
+        )}
+      </div>
+    )}
+    </div>
   );
 }

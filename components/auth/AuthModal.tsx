@@ -252,7 +252,9 @@ export default function AuthModal({ open, onClose, initialMode = "login", recove
           )}
         </form>
 
-        <p className="mt-5 text-center text-[11px] text-neutral-500">
+        <p className="mt-5 flex justify-center gap-3 text-center text-[11px] text-neutral-500">
+          <a href="/landing" className="underline-offset-2 hover:text-neutral-300 hover:underline">Features &amp; Pricing</a>
+          <span aria-hidden>·</span>
           <a href="/privacy" target="_blank" rel="noopener" className="underline-offset-2 hover:text-neutral-300 hover:underline">Privacy Policy</a>
         </p>
       </div>

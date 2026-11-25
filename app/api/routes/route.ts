@@ -46,5 +46,5 @@ export async function GET(req: Request) {
     cover_url: (r.cover_url as string | null) ?? null,
     url: `${SITE}/?route=${encodeURIComponent(r.slug as string)}`,
   }));
-  return NextResponse.json(routes, { headers: { ...CORS, "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600" } });
+  return NextResponse.json(routes, { headers: { ...CORS, "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } });
 }

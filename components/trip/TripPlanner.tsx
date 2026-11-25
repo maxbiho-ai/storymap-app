@@ -18,6 +18,7 @@ import type { PlaceSuggestion } from "@/lib/geocode";
 import { routeShareUrl, slugify, type RouteTip, type TipKind } from "@/lib/readyRoutes";
 import { tripToRoute } from "@/lib/readyRoutesTrip";
 import { publishReadyRoute, slugTaken } from "@/lib/readyRoutesApi";
+import { useRoutesStore } from "@/store/routesStore";
 
 const inputCls = "rounded-lg border border-white/10 bg-neutral-900 px-2.5 py-1.5 text-sm text-white outline-none placeholder:text-neutral-500 focus:border-amber-300";
 const smallBtn = "rounded-lg bg-white/10 px-2.5 py-1 max-md:min-h-10 text-xs font-medium text-neutral-100 hover:bg-white/20 disabled:opacity-40";
@@ -56,7 +57,15 @@ export default function TripPlanner({ user, onRequireLogin, isAdmin = false }: {
   const [planning, setPlanning] = useState(false);
   const [xlsxBusy, setXlsxBusy] = useState(false);
   /** Owner-only "Publish to Ready Routes" form */
-  const [pub, setPub] = useState<{ title: string; slug: string; slugEdited: boolean; description: string; tips: string; country: string } | null>(null);
+  const [pub, setPub] = useState<{ title: string; slug: string; slugEdited: boolean; description: string; tips: string; country: string; keep?: { published: boolean; sort_order: number } } | null>(null);
+  // "Open in Trip Planner" from the Ready Routes editor: prefill the publish form with the route details
+  const prefill = useRoutesStore((s) => s.plannerPrefill);
+  const setPrefill = useRoutesStore((s) => s.setPlannerPrefill);
+  useEffect(() => {
+    if (!prefill) return;
+    setPub({ title: prefill.title, slug: prefill.slug, slugEdited: true, description: prefill.description, tips: prefill.tips, country: prefill.country, keep: { published: prefill.published, sort_order: prefill.sort_order } });
+    setPrefill(null);
+  }, [prefill, setPrefill]);
   const [publishing, setPublishing] = useState(false);
 
   // The planner works on the road map: switch to Streets while it is open, put the user's style back when it closes
@@ -249,7 +258,8 @@ export default function TripPlanner({ user, onRequireLogin, isAdmin = false }: {
     setPublishing(true);
     try {
       if ((await slugTaken(slug)) && !window.confirm(`A Ready Route with the link "${slug}" already exists. Replace it?`)) return;
-      const saved = await publishReadyRoute(tripToRoute(trip, { title: pub.title, slug, description: pub.description, tips: parseTips(pub.tips), country: pub.country }));
+      const saved = await publishReadyRoute({ ...tripToRoute(trip, { title: pub.title, slug, description: pub.description, tips: parseTips(pub.tips), country: pub.country }), ...(pub.keep ?? {}) });
+      useRoutesStore.getState().bump();
       const url = routeShareUrl(saved.slug, undefined, window.location.origin);
       void navigator.clipboard?.writeText(url).catch(() => undefined);
       flash("ok", `Published to Ready Routes: ${url} (link copied)`);

@@ -79,8 +79,8 @@ export function tripToRoute(trip: Trip, input: { title: string; slug: string; de
   };
 }
 
-/** Ready Route → a Trip (starting today) for the Excel export */
-export function routeToTrip(r: CuratedRoute): Trip {
+/** Ready Route → a Trip (starting today) for the Excel export, or for editing in the Trip Planner (plain descriptions) */
+export function routeToTrip(r: CuratedRoute, opts: { forEditing?: boolean } = {}): Trip {
   const start = isoDate(new Date());
   const days = r.plan.days.map((d, i) => ({
     date: addDays(start, i),
@@ -92,7 +92,7 @@ export function routeToTrip(r: CuratedRoute): Trip {
       longitude: s.longitude,
       source: "storymap" as const,
       thumb: s.thumb ?? null,
-      description: [s.light && `Best light: ${s.light}`, s.description].filter(Boolean).join(" · ") || null,
+      description: (opts.forEditing ? s.description : [s.light && `Best light: ${s.light}`, s.description].filter(Boolean).join(" · ")) || null,
       logistics: s.logistics ?? null,
       durationMinutes: s.durationMinutes ?? DEFAULT_DURATION,
       transitMinutes: j === 0 ? 0 : legBetween(d.stops[j - 1], s).minutes,

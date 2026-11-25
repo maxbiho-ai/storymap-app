@@ -9,6 +9,7 @@ import FloatingGallery from "@/components/gallery/FloatingGallery";
 import PhotoDrawer from "@/components/map/PhotoDrawer";
 import AuthButton from "@/components/auth/AuthButton";
 import AuthModal from "@/components/auth/AuthModal";
+import RouteEditor from "@/components/routes/RouteEditor";
 import { useAuth } from "@/hooks/useAuth";
 import { useCreatorAccess } from "@/hooks/useCreatorAccess";
 import { photosLeft, quotaLabel } from "@/lib/beta";
@@ -367,8 +368,19 @@ function StoryMap() {
   const routeLinkDone = useRef(false);
   useEffect(() => {
     if (!map || routeLinkDone.current) return;
-    const slug = new URLSearchParams(window.location.search).get("route");
-    if (!slug) return;
+    const params = new URLSearchParams(window.location.search);
+    const slug = params.get("route");
+    if (!slug) {
+      // /?view=routes → the Ready Routes gallery (links from /landing)
+      if (params.get("view") === "routes") {
+        routeLinkDone.current = true;
+        useRoutesStore.getState().setGalleryOpen(true);
+        const u = new URL(window.location.href);
+        u.searchParams.delete("view");
+        window.history.replaceState(window.history.state, "", u.toString());
+      }
+      return;
+    }
     routeLinkDone.current = true;
     getReadyRoute(slug)
       .then((r) => {
@@ -377,6 +389,11 @@ function StoryMap() {
       })
       .catch(() => useRoutesStore.getState().setGalleryOpen(true));
   }, [map]);
+
+  // Admin controls in the Ready Routes gallery / panel / editor
+  useEffect(() => {
+    useRoutesStore.getState().setIsAdmin(access.isAdmin);
+  }, [access.isAdmin]);
 
   // A Ready Route takes the right side: close the trip planner, the uploader and any open card
   useEffect(() => {
@@ -620,6 +637,13 @@ function StoryMap() {
           </div>
           {filterPills}
         </div>
+        <a
+          href="/landing"
+          className="pointer-events-auto hidden h-11 shrink-0 items-center rounded-2xl bg-neutral-950/85 px-3 text-sm font-semibold text-neutral-200 shadow-lg backdrop-blur transition hover:bg-neutral-800 hover:text-white md:flex"
+        >
+          <span className="hidden xl:inline">Features &amp; Pricing</span>
+          <span className="xl:hidden">Pricing</span>
+        </a>
         <button
           type="button"
           onClick={() => setRoutesGalleryOpen(true)}
@@ -725,6 +749,9 @@ function StoryMap() {
                     <button type="button" onClick={() => { setMobilePanel(null); setRoutesGalleryOpen(true); }} className="flex min-h-11 w-full items-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-semibold">
                       <span aria-hidden>🗺️</span> Ready Routes
                     </button>
+                    <a href="/landing" className="flex min-h-11 w-full items-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-semibold">
+                      <span aria-hidden>✦</span> Features &amp; Pricing
+                    </a>
                     <div className="flex items-center gap-2">
                       <ListsMenu />
                       <NotificationsBell onNavigate={(n) => { setMobilePanel(null); onNotification(n); }} />
@@ -804,6 +831,7 @@ function StoryMap() {
           }}
         />
       )}
+      {access.isAdmin && <RouteEditor />}
       {adminOpen && access.isAdmin && <AdminPanel onClose={() => setAdminOpen(false)} />}
       <AuthModal open={authOpen || recovery} recovery={recovery} onClose={() => { setAuthOpen(false); endRecovery(); }} />
     </main>

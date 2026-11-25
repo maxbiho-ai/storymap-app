@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMap } from "react-map-gl";
 import { MAP_ID } from "@/components/map/constants";
 import { useRoutesStore } from "@/store/routesStore";
+import { deleteReadyRoute } from "@/lib/readyRoutesApi";
 import { useMapStore } from "@/store/mapStore";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { boundsOf } from "@/lib/pins";
@@ -74,6 +75,9 @@ export default function ReadyRoutePanel() {
   const route = useRoutesStore((s) => s.active);
   const closeRoute = useRoutesStore((s) => s.closeRoute);
   const setGalleryOpen = useRoutesStore((s) => s.setGalleryOpen);
+  const isAdmin = useRoutesStore((s) => s.isAdmin);
+  const openEditor = useRoutesStore((s) => s.openEditor);
+  const bump = useRoutesStore((s) => s.bump);
   const signedIn = Boolean(useMapStore((s) => s.currentUserId));
   const requestLogin = useMapStore((s) => s.requestLogin);
   const isDesktop = useIsDesktop();
@@ -127,6 +131,16 @@ export default function ReadyRoutePanel() {
       setBusy(false);
     }
   });
+  const removeRoute = async () => {
+    if (!window.confirm(`Delete "${route.title}" from Ready Routes?\n\nIts link (?route=${route.slug}) stops working. This can't be undone.`)) return;
+    try {
+      await deleteReadyRoute(route.id);
+      closeRoute();
+      bump();
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Could not delete the route");
+    }
+  };
   const gmaps = googleMapsRouteUrl(stops);
   const km = routeDistanceKm(route);
   const freeTips = route.tips.slice(0, FREE_TIPS);
@@ -152,6 +166,12 @@ export default function ReadyRoutePanel() {
             <h2 className="truncate text-base font-semibold text-white">{route.title}</h2>
             <p className="text-[11px] text-neutral-300">{route.days} day{route.days === 1 ? "" : "s"} · {route.stops_count} stops{km > 0 ? ` · ≈ ${fmtKm(km)}` : ""}</p>
           </button>
+          {isAdmin && (
+            <>
+              <button type="button" onClick={() => openEditor(structuredClone(route))} className="rounded-full bg-sky-400/80 px-2.5 py-1 text-[11px] font-semibold text-neutral-950 hover:bg-sky-300">Edit</button>
+              <button type="button" onClick={() => void removeRoute()} className="rounded-full bg-red-600/70 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-red-600">Delete</button>
+            </>
+          )}
           <button type="button" onClick={() => { closeRoute(); setGalleryOpen(true); }} className="rounded-full bg-black/50 px-2.5 py-1 text-[11px] font-semibold text-neutral-100 hover:bg-black/70">All routes</button>
           <button type="button" onClick={closeRoute} aria-label="Close route" className="flex h-7 w-7 items-center justify-center rounded-full bg-black/50 text-lg leading-none text-neutral-200 hover:bg-black/70">×</button>
         </div>
