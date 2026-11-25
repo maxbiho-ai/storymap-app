@@ -7,7 +7,8 @@ import { EMPTY_GEAR, type GearFilters } from "@/lib/gear";
 export type MapMode = "dark" | "streets" | "satellite" | "terrain";
 /** Pins / Dots (default), stacked Thumbnails, or a density Heatmap */
 export type ViewMode = "dots" | "thumbs" | "heat";
-export const DEFAULT_WALK_RADIUS_KM = 15;
+/** 2 km (2000 m): a walkable radius around the pin */
+export const DEFAULT_WALK_RADIUS_KM = 2;
 
 export interface Bounds { north: number; south: number; east: number; west: number }
 export interface LatLng { latitude: number; longitude: number }
@@ -207,7 +208,7 @@ export const useMapStore = create<MapState>((set) => ({
 
   walk: null,
   walkStops: [],
-  startWalk: (origin) => set((s) => ({ walk: { origin, radiusKm: s.walk?.radiusKm ?? DEFAULT_WALK_RADIUS_KM }, walkStops: [], activeCollection: null })),
+  startWalk: (origin) => set((s) => ({ walk: { origin, radiusKm: DEFAULT_WALK_RADIUS_KM }, walkStops: [], activeCollection: null })),
   setWalkRadius: (radiusKm) => set((s) => (s.walk ? { walk: { ...s.walk, radiusKm } } : {})),
   setWalkStops: (walkStops) => set({ walkStops }),
   endWalk: () => set({ walk: null, walkStops: [] }),

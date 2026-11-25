@@ -35,11 +35,6 @@ const GoogleLogo = () => (
     <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3a12 12 0 01-4.1 5.5l6.3 5.3C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z" />
   </svg>
 );
-const FacebookLogo = () => (
-  <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
-    <path fill="#1877F2" d="M24 12a12 12 0 10-13.9 11.9v-8.4H7.1V12h3V9.4c0-3 1.8-4.7 4.5-4.7 1.3 0 2.7.2 2.7.2v3h-1.5c-1.5 0-2 .9-2 1.9V12h3.4l-.5 3.5h-2.9v8.4A12 12 0 0024 12z" />
-  </svg>
-);
 const Eye = ({ off }: { off?: boolean }) => (
   <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
@@ -74,7 +69,7 @@ export default function AuthModal({ open, onClose, initialMode = "login", recove
 
   if (!open) return null;
 
-  const oauth = async (provider: "google" | "facebook") => {
+  const oauth = async (provider: "google") => {
     setBusy(true);
     setError(null);
     const { error } = await getSupabase().auth.signInWithOAuth({ provider, options: { redirectTo: window.location.origin } });
@@ -163,9 +158,6 @@ export default function AuthModal({ open, onClose, initialMode = "login", recove
             <div className="space-y-2">
               <button type="button" disabled={busy} onClick={() => void oauth("google")} className={social}>
                 <GoogleLogo /> Continue with Google
-              </button>
-              <button type="button" disabled={busy} onClick={() => void oauth("facebook")} className={social}>
-                <FacebookLogo /> Continue with Facebook
               </button>
             </div>
             <div className="my-4 flex items-center gap-3 text-[11px] uppercase tracking-wide text-neutral-500">
@@ -259,6 +251,10 @@ export default function AuthModal({ open, onClose, initialMode = "login", recove
             </button>
           )}
         </form>
+
+        <p className="mt-5 text-center text-[11px] text-neutral-500">
+          <a href="/privacy" target="_blank" rel="noopener" className="underline-offset-2 hover:text-neutral-300 hover:underline">Privacy Policy</a>
+        </p>
       </div>
     </div>
   );

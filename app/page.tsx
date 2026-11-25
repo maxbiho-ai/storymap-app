@@ -29,6 +29,10 @@ import NearbyWalkPanel from "@/components/map/NearbyWalkPanel";
 import MapToolbar from "@/components/map/MapToolbar";
 import TripPlanner from "@/components/trip/TripPlanner";
 import { useTripStore } from "@/store/tripStore";
+import { useRoutesStore } from "@/store/routesStore";
+import ReadyRoutesGallery from "@/components/routes/ReadyRoutesGallery";
+import ReadyRoutePanel from "@/components/routes/ReadyRoutePanel";
+import { getReadyRoute } from "@/lib/readyRoutesApi";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { lensOptions, matchesGear, gearCount, EMPTY_GEAR } from "@/lib/gear";
 import NotificationsBell, { type AppNotification } from "@/components/social/NotificationsBell";
@@ -100,6 +104,8 @@ function StoryMap() {
   const isDesktop = useIsDesktop();
   const tripOpen = useTripStore((s) => s.open);
   const setTripOpen = useTripStore((s) => s.setOpen);
+  const activeRoute = useRoutesStore((s) => s.active);
+  const setRoutesGalleryOpen = useRoutesStore((s) => s.setGalleryOpen);
 
   // The global pin layer: every photo matching the search (text / #tags / @photographer / place), whatever the
   // viewport and whatever the sidebar shows. Panning never re-queries.
@@ -357,6 +363,30 @@ function StoryMap() {
       });
   }, [map, select]);
 
+  // Ready Route deep link: /?route=<slug> → open that route on the map with its itinerary
+  const routeLinkDone = useRef(false);
+  useEffect(() => {
+    if (!map || routeLinkDone.current) return;
+    const slug = new URLSearchParams(window.location.search).get("route");
+    if (!slug) return;
+    routeLinkDone.current = true;
+    getReadyRoute(slug)
+      .then((r) => {
+        if (r) useRoutesStore.getState().openRoute(r);
+        else useRoutesStore.getState().setGalleryOpen(true);
+      })
+      .catch(() => useRoutesStore.getState().setGalleryOpen(true));
+  }, [map]);
+
+  // A Ready Route takes the right side: close the trip planner, the uploader and any open card
+  useEffect(() => {
+    if (!activeRoute) return;
+    setTripOpen(false);
+    setUploadOpen(false);
+    select(null);
+    useMapStore.getState().endWalk();
+  }, [activeRoute, setTripOpen, select]);
+
   // Guest tried to like / save / comment → login
   const loginRequest = useMapStore((s) => s.loginRequest);
   useEffect(() => {
@@ -457,6 +487,7 @@ function StoryMap() {
 
   const toggleTrip = () => {
     if (!tripOpen) {
+      useRoutesStore.getState().closeRoute();
       setUploadOpen(false);
       useMapStore.getState().endWalk();
       select(null);
@@ -591,6 +622,18 @@ function StoryMap() {
         </div>
         <button
           type="button"
+          onClick={() => setRoutesGalleryOpen(true)}
+          aria-pressed={Boolean(activeRoute)}
+          className={`pointer-events-auto flex h-11 shrink-0 items-center gap-2 rounded-2xl px-3 text-sm font-semibold shadow-lg transition sm:px-4 ${
+            activeRoute ? "bg-white text-neutral-900 hover:bg-neutral-200" : "bg-neutral-950/85 text-white ring-1 ring-sky-300/60 backdrop-blur hover:bg-neutral-800"
+          }`}
+        >
+          <span aria-hidden>🗺️</span>
+          <span className="hidden lg:inline">Ready Routes</span>
+          <span className="lg:hidden">Routes</span>
+        </button>
+        <button
+          type="button"
           onClick={toggleTrip}
           aria-pressed={tripOpen}
           className={`pointer-events-auto flex h-11 shrink-0 items-center gap-2 rounded-2xl px-3 text-sm font-semibold shadow-lg transition sm:px-4 ${
@@ -679,6 +722,9 @@ function StoryMap() {
                     <button type="button" onClick={() => { setMobilePanel(null); toggleTrip(); }} className="flex min-h-11 w-full items-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-semibold">
                       <span aria-hidden>🧭</span> Plan a Photo Trip
                     </button>
+                    <button type="button" onClick={() => { setMobilePanel(null); setRoutesGalleryOpen(true); }} className="flex min-h-11 w-full items-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-semibold">
+                      <span aria-hidden>🗺️</span> Ready Routes
+                    </button>
                     <div className="flex items-center gap-2">
                       <ListsMenu />
                       <NotificationsBell onNavigate={(n) => { setMobilePanel(null); onNotification(n); }} />
@@ -710,7 +756,9 @@ function StoryMap() {
         onClearFilters={clearFilters}
       />
       {walk && !pickMode && !gpsEdit && <NearbyWalkPanel />}
-      {!pickMode && !gpsEdit && <TripPlanner user={user} onRequireLogin={() => setAuthOpen(true)} />}
+      {!pickMode && !gpsEdit && <TripPlanner user={user} onRequireLogin={() => setAuthOpen(true)} isAdmin={access.isAdmin} />}
+      {!pickMode && !gpsEdit && <ReadyRoutePanel />}
+      <ReadyRoutesGallery />
 
       {selectedPhoto && !pickMode && !gpsEdit && <PhotoDrawer photo={selectedPhoto} stack={selectedStack} onClose={() => select(null)} />}
 

@@ -69,6 +69,43 @@ export function contentLabPayload(photo: Photo, imageUrl: string, folder: Conten
   };
 }
 
+export interface CollageContentLabInfo {
+  imageUrl: string | null;
+  title: string;
+  /** Places in the collage, in order */
+  locations: string[];
+  country: string | null;
+  tags: string[];
+  credit: string | null;
+  photoIds: string[];
+  ideaNote?: string;
+}
+
+/** Content Lab import for a Collage Studio image (same query-string contract as a single photo) */
+export function collageContentLabUrl(c: CollageContentLabInfo, folder: ContentLabFolder): { url: string; payload: Record<string, unknown> } {
+  const payload = {
+    import_source: "storymap",
+    import_kind: "collage",
+    target_folder: folder,
+    title: clean(c.title),
+    description: c.locations.length ? `Collage: ${c.locations.slice(0, 10).join(" · ")}` : null,
+    idea_note: clean(c.ideaNote),
+    image_url: c.imageUrl,
+    location: c.locations[0] ?? null,
+    country: c.country,
+    tags: [...new Set(c.tags)].slice(0, 20),
+    credit: clean(c.credit),
+    photo_ids: c.photoIds,
+    storymap_url: "https://my-storymap.netlify.app/",
+  };
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(payload)) {
+    if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) continue;
+    q.set(k, Array.isArray(v) ? v.join(",") : String(v));
+  }
+  return { url: `${CONTENT_LAB_URL}?${q.toString()}`, payload };
+}
+
 /** https://content-lab-app.netlify.app/?import_source=storymap&image_url=…&location=…&credit=… (empty values are left out) */
 export function contentLabUrl(p: ContentLabPayload): string {
   const q = new URLSearchParams();

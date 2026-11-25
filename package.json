@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "import:trip": "tsx --conditions=react-server scripts/import-trip.ts"
+    "import:trip": "tsx --conditions=react-server scripts/import-trip.ts",
+    "seed:routes": "tsx scripts/seed-routes.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1172.0",

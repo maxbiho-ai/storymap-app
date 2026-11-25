@@ -18,6 +18,7 @@ import SunRays from "./SunRays";
 import MapStyleSwitcher from "./MapStyleSwitcher";
 import CountryLayer, { type CountryPill } from "./CountryLayer";
 import TripLayer from "@/components/trip/TripLayer";
+import ReadyRouteLayer from "@/components/routes/ReadyRouteLayer";
 import { destination } from "@/lib/sunMoon";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { MAP_ID } from "./constants";
@@ -500,6 +501,7 @@ export default function MapView({ pins, groups, selected, stack, countryCounts, 
       )}
 
       <TripLayer />
+      <ReadyRouteLayer />
 
       {markersVisible && items.map(renderItem)}
 

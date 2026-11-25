@@ -15,6 +15,9 @@ import StopCard from "./StopCard";
 import { deleteTrip, listTrips, loadTrip, saveTrip, type SavedTrip } from "@/lib/tripApi";
 import { googleMapsRouteUrl } from "@/hooks/useCollectionPhotos";
 import type { PlaceSuggestion } from "@/lib/geocode";
+import { routeShareUrl, slugify, type RouteTip, type TipKind } from "@/lib/readyRoutes";
+import { tripToRoute } from "@/lib/readyRoutesTrip";
+import { publishReadyRoute, slugTaken } from "@/lib/readyRoutesApi";
 
 const inputCls = "rounded-lg border border-white/10 bg-neutral-900 px-2.5 py-1.5 text-sm text-white outline-none placeholder:text-neutral-500 focus:border-amber-300";
 const smallBtn = "rounded-lg bg-white/10 px-2.5 py-1 max-md:min-h-10 text-xs font-medium text-neutral-100 hover:bg-white/20 disabled:opacity-40";
@@ -22,7 +25,7 @@ const smallBtn = "rounded-lg bg-white/10 px-2.5 py-1 max-md:min-h-10 text-xs fon
 const SCOUT_LABEL: Record<ScoutSpotDto["phase"], string> = { sunrise: "🌅 Sunrise", sunset: "🌇 Sunset / Golden Hour", midday: "☀️ Midday" };
 
 /** "Plan a Photo Trip": dates → day cards → multi-stop days with exact solar times and photo-spot recommendations */
-export default function TripPlanner({ user, onRequireLogin }: { user: User | null; onRequireLogin: () => void }) {
+export default function TripPlanner({ user, onRequireLogin, isAdmin = false }: { user: User | null; onRequireLogin: () => void; isAdmin?: boolean }) {
   const { [MAP_ID]: map } = useMap();
   const open = useTripStore((s) => s.open);
   const setOpen = useTripStore((s) => s.setOpen);
@@ -52,6 +55,9 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
   const [prompt, setPrompt] = useState("");
   const [planning, setPlanning] = useState(false);
   const [xlsxBusy, setXlsxBusy] = useState(false);
+  /** Owner-only "Publish to Ready Routes" form */
+  const [pub, setPub] = useState<{ title: string; slug: string; slugEdited: boolean; description: string; tips: string; country: string } | null>(null);
+  const [publishing, setPublishing] = useState(false);
 
   // The planner works on the road map: switch to Streets while it is open, put the user's style back when it closes
   useEffect(() => {
@@ -224,6 +230,37 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
     }
   };
 
+  /** "parking: …" / "drone: …" / anything else = photo tip, one per line */
+  const parseTips = (text: string): RouteTip[] =>
+    text
+      .split(/\n+/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => {
+        const m = /^(parking|drone|photo)\s*:\s*(.+)$/i.exec(l);
+        return { kind: (m ? m[1].toLowerCase() : "photo") as TipKind, text: (m ? m[2] : l).slice(0, 500) };
+      });
+
+  const publishRoute = async () => {
+    if (!pub || !isAdmin) return;
+    const slug = slugify(pub.slug || pub.title);
+    if (!pub.title.trim()) return flash("err", "Give the route a title");
+    if (!allStops.length) return flash("err", "Add stops first");
+    setPublishing(true);
+    try {
+      if ((await slugTaken(slug)) && !window.confirm(`A Ready Route with the link "${slug}" already exists. Replace it?`)) return;
+      const saved = await publishReadyRoute(tripToRoute(trip, { title: pub.title, slug, description: pub.description, tips: parseTips(pub.tips), country: pub.country }));
+      const url = routeShareUrl(saved.slug, undefined, window.location.origin);
+      void navigator.clipboard?.writeText(url).catch(() => undefined);
+      flash("ok", `Published to Ready Routes: ${url} (link copied)`);
+      setPub(null);
+    } catch (e) {
+      flash("err", e instanceof Error ? e.message : "Could not publish");
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   const copyItinerary = async () => {
     try {
       await navigator.clipboard.writeText(whatsappItinerary(trip));
@@ -339,7 +376,38 @@ export default function TripPlanner({ user, onRequireLogin }: { user: User | nul
           <button type="button" className={`${smallBtn} !bg-emerald-400/20 !text-emerald-100 hover:!bg-emerald-400/30`} onClick={exportXlsx} disabled={!allStops.length || xlsxBusy}>{xlsxBusy ? "Building…" : "📊 Export Excel (.xlsx)"}</button>
           <button type="button" className={smallBtn} onClick={() => { if (!allStops.length || window.confirm("Start a new trip? Unsaved changes are lost.")) { reset(); setSpotsOpen({}); setAi({}); } }}>＋ New</button>
           {allStops.length > 0 && <button type="button" className={smallBtn} onClick={() => fitStops(allStops)}>⤢ Fit</button>}
+          {isAdmin && (
+            <button
+              type="button"
+              className={`${smallBtn} !bg-sky-400/20 !text-sky-100 hover:!bg-sky-400/30`}
+              disabled={!allStops.length}
+              onClick={() => setPub((v) => (v ? null : { title: trip.name, slug: slugify(trip.name), slugEdited: false, description: "", tips: "", country: "" }))}
+              title="Owner only: save this plan to the public Ready Routes library"
+            >
+              🗺️ Publish to Ready Routes
+            </button>
+          )}
         </div>
+        {isAdmin && pub && (
+          <div className="space-y-2 rounded-2xl border border-sky-300/25 bg-sky-300/[0.06] p-3">
+            <p className="text-xs font-semibold text-sky-100">Publish to Ready Routes</p>
+            <input value={pub.title} onChange={(e) => setPub({ ...pub, title: e.target.value, slug: pub.slugEdited ? pub.slug : slugify(e.target.value) })} maxLength={140} placeholder="Title, e.g. Iceland South Coast in 5 Days" aria-label="Route title" className={`${inputCls} w-full`} />
+            <div className="flex items-center gap-1 text-[11px] text-neutral-400">
+              <span className="shrink-0">/?route=</span>
+              <input value={pub.slug} onChange={(e) => setPub({ ...pub, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"), slugEdited: true })} maxLength={80} aria-label="Route link slug" className={`${inputCls} min-w-0 flex-1 !py-1 !text-xs`} />
+            </div>
+            <input value={pub.country} onChange={(e) => setPub({ ...pub, country: e.target.value })} maxLength={60} placeholder="Country (auto-detected when empty)" aria-label="Country" className={`${inputCls} w-full`} />
+            <textarea value={pub.description} onChange={(e) => setPub({ ...pub, description: e.target.value })} rows={2} maxLength={2000} placeholder="Short description for the route card" aria-label="Route description" className={`${inputCls} w-full resize-y`} />
+            <textarea value={pub.tips} onChange={(e) => setPub({ ...pub, tips: e.target.value })} rows={3} maxLength={6000} placeholder={"Pro tips, one per line (the first 3 are public):\nBring a 10-stop ND filter for the falls\nparking: Free lot 200 m before the trailhead\ndrone: No-fly zone inside the national park"} aria-label="Pro tips" className={`${inputCls} w-full resize-y text-xs`} />
+            <p className="text-[11px] text-neutral-400">{trip.days.filter((d) => d.stops.length).length} days · {allStops.length} stops. Light per stop is set from each stop&apos;s planned arrival time.</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" className={smallBtn} onClick={() => setPub(null)}>Cancel</button>
+              <button type="button" onClick={publishRoute} disabled={publishing} className="rounded-lg bg-sky-300 px-3 py-1 text-xs font-semibold text-neutral-900 hover:bg-sky-200 disabled:opacity-50 max-md:min-h-10">
+                {publishing ? "Publishing…" : "Publish"}
+              </button>
+            </div>
+          </div>
+        )}
         {msg && <p className={`rounded-lg px-3 py-1.5 text-xs ${msg.kind === "ok" ? "bg-emerald-950/70 text-emerald-200" : "bg-red-950/70 text-red-200"}`}>{msg.text}</p>}
 
         {saved && (

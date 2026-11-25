@@ -5,10 +5,10 @@ import type { Photo } from "@/types/photo";
 import { useMapStore } from "@/store/mapStore";
 import { contentLabPayload, contentLabUrl, type ContentLabFolder } from "@/lib/contentLab";
 
-const btn = "rounded-md px-2 py-1 text-[11px] font-bold tracking-wide transition max-md:min-h-9";
+const btn = "shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-bold tracking-wide transition max-md:min-h-9";
 
 /**
- * "Send to Content Lab" + PAST / EVERGREEN (owner only) + Idea Bank (anyone: a typed idea note, routed to the Content Playbook).
+ * One-row Content Lab bar: PAST / EVERGREEN (owner only) + A Bank of Ideas (anyone: a typed idea note, routed to the Content Playbook).
  * Opens Content Lab with the photo in the query string and keeps a JSON copy on the clipboard as a fallback.
  */
 export default function ContentLabRow({ photo, imageUrl }: { photo: Photo; imageUrl: string }) {
@@ -21,7 +21,7 @@ export default function ContentLabRow({ photo, imageUrl }: { photo: Photo; image
     const payload = contentLabPayload(photo, imageUrl, folder, note);
     window.open(contentLabUrl(payload), "_blank", "noopener,noreferrer"); // inside the click, so it is not popup-blocked
     const done = (ok: boolean) => {
-      setMsg(`Sent to Content Lab (${folder === "playbook" ? "Idea Bank" : folder.toUpperCase()}).${ok ? " A JSON copy is on your clipboard." : ""}`);
+      setMsg(`Sent to Content Lab (${folder === "playbook" ? "A Bank of Ideas" : folder.toUpperCase()}).${ok ? " A JSON copy is on your clipboard." : ""}`);
       setTimeout(() => setMsg(null), 5000);
     };
     if (navigator.clipboard?.writeText) navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => done(true), () => done(false));
@@ -31,16 +31,15 @@ export default function ContentLabRow({ photo, imageUrl }: { photo: Photo; image
   const ownerOnly = "Only the photo's owner can send it to this folder";
   return (
     <div className="!mt-2 space-y-1.5">
-      <div className="flex flex-wrap items-center gap-1.5 rounded-xl bg-white/5 px-2.5 py-1.5">
-        <span className="me-auto text-[11px] font-semibold text-violet-200">Send to Content Lab</span>
-        <button type="button" disabled={!isOwner} onClick={() => send("past")} title={isOwner ? "Send to the PAST folder" : ownerOnly} className={`${btn} bg-violet-400/90 text-neutral-950 hover:bg-violet-300 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-neutral-500`}>
+      <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto rounded-xl bg-white/5 px-2 py-1.5">
+        <button type="button" disabled={!isOwner} onClick={() => send("past")} title={isOwner ? "Send to Content Lab Past folder" : ownerOnly} className={`${btn} bg-violet-400/90 text-neutral-950 hover:bg-violet-300 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-neutral-500`}>
           PAST
         </button>
-        <button type="button" disabled={!isOwner} onClick={() => send("evergreen")} title={isOwner ? "Send to the EVERGREEN folder" : ownerOnly} className={`${btn} bg-emerald-400/90 text-neutral-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-neutral-500`}>
+        <button type="button" disabled={!isOwner} onClick={() => send("evergreen")} title={isOwner ? "Send to Content Lab Evergreen folder" : ownerOnly} className={`${btn} bg-emerald-400/90 text-neutral-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-neutral-500`}>
           EVERGREEN
         </button>
-        <button type="button" onClick={() => setIdea((v) => (v === null ? "" : null))} aria-expanded={idea !== null} title="Save it to the Content Playbook with your own idea" className={`${btn} bg-amber-300 text-neutral-950 hover:bg-amber-200`}>
-          Idea Bank
+        <button type="button" onClick={() => setIdea((v) => (v === null ? "" : null))} aria-expanded={idea !== null} title="Send to Content Lab Content Playbook" className={`${btn} bg-amber-300 text-neutral-950 hover:bg-amber-200`}>
+          A Bank of Ideas
         </button>
       </div>
       {idea !== null && (

@@ -10,7 +10,7 @@ import { googleMapsRouteUrl } from "@/hooks/useCollectionPhotos";
 import type { Photo } from "@/types/photo";
 import { MAP_ID } from "./constants";
 
-const RADII = [5, 10, 15, 20, 30, 50];
+const RADII = [1, 2, 5, 10, 15, 20, 30, 50];
 
 /** "What else to shoot nearby?": pins around the open one, in shooting-light order, as a loop to plan */
 export default function NearbyWalkPanel() {
@@ -97,7 +97,7 @@ export default function NearbyWalkPanel() {
             {RADII.map((r) => <option key={r} value={r}>{r} km</option>)}
           </select>
         </label>
-        <span className="text-neutral-500">≈ {Math.round(((radiusKm * 1.3) / 45) * 60)} min drive</span>
+        <span className="text-neutral-500">{radiusKm <= 3 ? `≈ ${Math.round((radiusKm / 4.5) * 60)} min walk` : `≈ ${Math.round(((radiusKm * 1.3) / 45) * 60)} min drive`}</span>
         {loading && <span className="h-3 w-3 animate-spin rounded-full border-2 border-neutral-600 border-t-neutral-200" aria-label="Loading" />}
         {routeUrl && stops.length > 0 && (
           <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="ml-auto rounded-full bg-amber-300 px-2.5 py-1 font-semibold text-neutral-900 hover:bg-amber-200">

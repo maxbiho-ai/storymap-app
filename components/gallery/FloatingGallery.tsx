@@ -7,6 +7,7 @@ import { spotPhotoCount, type CountrySummary, type LightCounts, type Pin, type P
 import type { TimeOfDay } from "@/lib/timeOfDay";
 import TimeIcon from "@/components/map/TimeIcon";
 import { MAP_ID } from "@/components/map/constants";
+import CollageStudio from "@/components/collage/CollageStudio";
 
 interface Props {
   /** Photos matching the active filters, newest first (already capped at 500) */
@@ -45,6 +46,16 @@ function LightBadges({ light }: { light: LightCounts }) {
   );
 }
 
+/** 22px dark rounded-square badge with a white outline rectangle: ▯ portrait, ▭ landscape */
+function OrientationBadge({ orient }: { orient: "Landscape" | "Portrait" }) {
+  const portrait = orient === "Portrait";
+  return (
+    <span title={orient} aria-label={orient} className="absolute right-1.5 top-1.5 flex h-[22px] w-[22px] items-center justify-center rounded-md bg-black/65 backdrop-blur-sm">
+      <span aria-hidden className={`block rounded-[2px] border-[1.5px] border-white ${portrait ? "h-[14px] w-[10px]" : "h-[10px] w-[14px]"}`} />
+    </span>
+  );
+}
+
 /**
  * Floating sidebar, two modes:
  * - no filter: Destinations (country → place) with cover thumbnails and lighting badges; a click flies there and filters
@@ -72,6 +83,9 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
   const setDestinationsOpen = useMapStore((s) => s.setDestinationsOpen);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [more, setMore] = useState<Set<string>>(new Set());
+  const [collageOpen, setCollageOpen] = useState(false);
+  const query = useMapStore((s) => s.filters.query);
+  const tags = useMapStore((s) => s.filters.tags);
 
   const collapseOnMobile = () => {
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) setDestinationsOpen(false);
@@ -169,6 +183,16 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
               ⤳ Trip line
             </button>
           )}
+          {photos.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setCollageOpen(true)}
+              title="Make a shareable collage from these photos"
+              className="rounded-full bg-gradient-to-r from-amber-300 to-pink-300 px-2.5 py-1 font-semibold text-neutral-900 hover:brightness-110"
+            >
+              ✨ Collage
+            </button>
+          )}
           {mode === "photos" && matchCount > photos.length && <span className="text-neutral-500">showing newest {photos.length}</span>}
         </div>
       )}
@@ -251,7 +275,7 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
             <ul className="grid grid-cols-3 gap-2 md:grid-cols-2">
               {photos.map((p) => {
                 const tod = phaseIcon(p.solar_phase);
-                const orient = p.width && p.height ? (p.width >= p.height ? (p.width === p.height ? null : "Landscape") : "Portrait") : null;
+                const orient = p.width && p.height && p.width !== p.height ? (p.width > p.height ? ("Landscape" as const) : ("Portrait" as const)) : null;
                 const active = hoveredId === p.id || selectedId === p.id;
                 return (
                   <li key={p.id}>
@@ -276,12 +300,8 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
                       <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-6 text-start text-[11px] leading-tight text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100">
                         {p.location_name ?? p.title ?? ""}
                       </span>
-                      {orient && (
-                        <span className="absolute left-1.5 top-1.5 rounded bg-neutral-950/75 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none tracking-wider text-white ring-1 ring-white/20 backdrop-blur">
-                          {orient}
-                        </span>
-                      )}
-                      {sunAll && tod && <TimeIcon t={tod} size={18} className="absolute end-1.5 top-1.5" />}
+                      {orient && <OrientationBadge orient={orient} />}
+                      {sunAll && tod && <TimeIcon t={tod} size={18} className="absolute left-1.5 top-1.5" />}
                     </button>
                   </li>
                 );
@@ -289,6 +309,13 @@ export default function FloatingGallery({ gridPins, matchCount, summary, totalPi
             </ul>
           )}
         </div>
+      )}
+      {collageOpen && (
+        <CollageStudio
+          pins={photos}
+          defaultTitle={[spotFilter?.split(",")[0] ?? countryFilter ?? area?.name.split(",")[0] ?? query.trim(), tags.slice(0, 2).join(" ")].filter(Boolean).join(" ") || "My travels"}
+          onClose={() => setCollageOpen(false)}
+        />
       )}
     </aside>
   );

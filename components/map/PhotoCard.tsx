@@ -426,7 +426,7 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
           aria-pressed={walking}
           className={`!mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition ${walking ? "bg-sky-400 text-neutral-950 hover:bg-sky-300" : "bg-white/10 text-neutral-100 hover:bg-white/15"}`}
         >
-          🥾 {walking ? "End Nearby Photo Walk" : "Nearby Photo Walk · what else within 30 min?"}
+          🥾 {walking ? "End Nearby Photo Walk" : "Nearby Photo Walk - what else within 2 km?"}
         </button>
 
         <ContentLabRow photo={photo} imageUrl={images[Math.min(idx, images.length - 1)] ?? photo.photo_url} />
