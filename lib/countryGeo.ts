@@ -43,6 +43,35 @@ export function loadCountryIndex(): Promise<boolean> {
  * ray test treat half the world (Iceland!) as inside. Shift their western part to 180..360 so the ring is continuous;
  * countryAt() then also tests the point shifted by +360°.
  */
+/** Node scripts: hand over the polygons read from public/data/countries-50m.json instead of fetching them */
+export function primeCountryIndex(list: Entry[]): void {
+  entries = list.map((e) => ({ ...e, p: e.p.map((poly) => poly.map(unwrapRing)), country: canonicalCountry(e.n) }));
+  cache.clear();
+}
+
+/**
+ * Is (lat, lng) inside this canonical country, or within `slackDeg` of its border / coast? The slack keeps border photos
+ * (Untersberg summit, a lake shore) from counting as "in the neighbour". Unknown country / polygons not loaded → true.
+ */
+export function inCountry(country: string, lat: number, lng: number, slackDeg = NEAR_DEG): boolean {
+  if (!entries) return true;
+  const own = entries.filter((e) => e.country === country);
+  if (!own.length) return true;
+  if (countryAt(lat, lng) === country) return true;
+  const d2 = slackDeg * slackDeg;
+  for (const e of own) {
+    if (lng < e.b[0] - slackDeg || lng > e.b[2] + slackDeg || lat < e.b[1] - slackDeg || lat > e.b[3] + slackDeg) continue;
+    for (const poly of e.p)
+      for (const ring of poly)
+        for (let i = 0; i < ring.length; i += 2) {
+          const dx = ring[i] / Q - lng;
+          const dy = ring[i + 1] / Q - lat;
+          if (dx * dx + dy * dy < d2) return true;
+        }
+  }
+  return false;
+}
+
 function unwrapRing(ring: number[]): number[] {
   let jumps = false;
   for (let i = 2; i < ring.length; i += 2) if (Math.abs(ring[i] - ring[i - 2]) > 180 * Q) { jumps = true; break; }

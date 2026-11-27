@@ -483,9 +483,17 @@ export interface FolderPlace {
   from: string;
 }
 
-/** "13 - 25.07.15 - Gjainfoss" → "Gjainfoss"; "" if only a date/number */
+/**
+ * "13 - 25.07.15 - Gjainfoss" → "Gjainfoss"; "3 - day2 - Keukenhof - פארק הפרחים" → "Keukenhof - פארק הפרחים";
+ * "day9 - 29.08 - Cantabria" → "Cantabria"; "" if only a day / date / number
+ */
 export function cleanFolderName(name: string): string {
-  return norm(name).replace(/^[\d\s.\-–_/,]+/, "").replace(/[\s\-–_,.]+$/, "").trim();
+  let s = norm(name);
+  for (let prev = ""; prev !== s; ) {
+    prev = s;
+    s = s.replace(/^(?:(?:day|night|יום|לילה)\s*\d{1,3}(?![\d.])|[\d\s.\-–_/,]+)/i, "").trim();
+  }
+  return s.replace(/[\s\-–_,.]+$/, "").trim();
 }
 
 /** "road 208, 209" → "Route 208"; "road F208" / "F208" → "F208"; null if not a road folder */

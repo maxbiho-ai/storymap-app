@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getSupabase } from "@/lib/supabase/client";
+import { PUBLIC_PHOTO_COLUMNS } from "@/lib/photoColumns";
 import type { Photo } from "@/types/photo";
 
 const cache = new Map<string, Photo>();
@@ -25,11 +26,11 @@ export function useFullPhotos(ids: string[]): Photo[] {
       chunk.forEach((id) => inflight.add(id));
       getSupabase()
         .from("photos")
-        .select("*")
+        .select(PUBLIC_PHOTO_COLUMNS)
         .in("id", chunk)
         .then(({ data }) => {
           chunk.forEach((id) => inflight.delete(id));
-          for (const p of (data ?? []) as Photo[]) cache.set(p.id, p);
+          for (const p of (data ?? []) as unknown as Photo[]) cache.set(p.id, p);
           if (alive) setTick((t) => t + 1);
         });
     }

@@ -44,6 +44,15 @@ export interface Photo {
   source_key?: string | null;
   /** Field notes: permit, drone rules, tickets */
   permit_info: string | null;
+  /** Canonical English country (migration 012) */
+  country?: string | null;
+  /** exif | phone | folder_exif_match | folder | ai_geocoded | manual (migration 012) */
+  gps_source?: string | null;
+  /**
+   * Archive importer: the original folder name (migration 012). Owner / admin only: not in
+   * PUBLIC_PHOTO_COLUMNS: owner / admin read it via the photo_source_folders RPC (migration 013).
+   */
+  source_folder?: string | null;
 }
 
 type DbDefaulted = "story" | "image_urls" | "storage_provider" | "storage_keys" | "source" | "external_id" | "access_info" | "permit_info";

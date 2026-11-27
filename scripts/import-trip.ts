@@ -4,6 +4,13 @@
  *   npm run import:trip -- --dir "D:\Photki\איסלנד" --dry-run
  *   npm run import:trip -- --dir "D:\Photki\איסלנד" --ai --limit=20
  *
+ * Places (migration 012 required for real imports):
+ *   - location_name is always a clean English place ("Keukenhof Gardens, Lisse, Netherlands"), never the raw folder text;
+ *     the folder path itself goes to the admin-only source_folder column.
+ *   - GPS (EXIF, neighbours' EXIF, Mapbox) must lie in the expected country (country polygons). Corrupted EXIF GPS from
+ *     older cameras is discarded; the photo then gets a valid neighbour's GPS or Gemini's landmark geocode
+ *     (gps_source = 'ai_geocoded'). The dry run stays offline: it shows locally cleaned names and Mapbox places.
+ *
  * SAFETY: the archive is only ever READ (readdir / stat / read). Nothing is written, moved,
  * renamed or deleted on disk. All output goes to Supabase Storage + the photos table.
  *
@@ -51,6 +58,8 @@ import {
   type ScanFile,
   countryFromTripName,
 } from "./lib/archive";
+import { canonicalCountry } from "@/lib/countries";
+import { aiPlaces, inCountry, loadCountryPolygons, looksClean, stripFolderClutter, type PlaceAnswer } from "./lib/places";
 
 // ---------------------------------------------------------------------------
 // CLI + env
@@ -235,17 +244,67 @@ const wallMs = (w: string) => Date.parse(`${w}Z`);
 // Location: 3 tiers
 // ---------------------------------------------------------------------------
 
-/** exif = own GPS; phone / folder_exif_match = GPS of the closest photo in the same folder; folder = Mapbox on folder names */
-type Tier = "exif" | "phone" | "folder_exif_match" | "folder";
+/**
+ * exif = own GPS; phone / folder_exif_match = GPS of the closest photo in the same folder; folder = Mapbox on folder names;
+ * ai_geocoded = Gemini landmark geocode after the EXIF GPS was found outside the expected country (corrupted). Saved as gps_source.
+ */
+type Tier = "exif" | "phone" | "folder_exif_match" | "folder" | "ai_geocoded";
 interface Located {
   lat: number;
   lng: number;
   tier: Tier;
-  /** Human label used as location_name */
+  /** Raw place label from the folders (cleaned into location_name by publicName) */
   name: string | null;
   /** Folder place label (title fallback) */
   label: string | null;
+  /** Canonical country the photo must be in (null = unknown) */
+  country: string | null;
   note: string;
+}
+
+// ---------------------------------------------------------------------------
+// Gemini place answers per folder (real imports only): clean English name, country, landmark coordinates
+// ---------------------------------------------------------------------------
+
+let aiPlacesOn = false;
+let tripRoot = "";
+const folderAi = new Map<string, Promise<PlaceAnswer | null>>();
+
+function askAi(c: Candidate, res: Resolution | null, raw: string | null): Promise<PlaceAnswer | null> {
+  if (!aiPlacesOn) return Promise.resolve(null);
+  let p = folderAi.get(c.file.relDir);
+  if (!p) {
+    const folders = [tripRoot, c.file.relDir].filter(Boolean).join("/");
+    p = aiPlaces([{ key: "p", raw: raw || folders, folders, country: canonicalCountry(res?.country.name) ?? res?.country.name ?? null }], {
+      batchSize: 1,
+      timeoutMs: CLI_AI_TIMEOUT_MS,
+      beforeCall: async () => {
+        countAiCall();
+        await paceAi();
+      },
+      log: (m) => {
+        if (!/Gemini places:/.test(m)) console.log(m);
+      },
+    }).then((m) => m.get("p") ?? null);
+    folderAi.set(c.file.relDir, p);
+  }
+  return p;
+}
+
+/**
+ * The public location_name: never the raw folder text. "day2 - Keukenhof - פארק הפרחים, טיול לאמסטרדם" →
+ * "Keukenhof Gardens, Lisse, Netherlands". Plain folder clutter is stripped locally; anything with non-Latin words, an
+ * unknown country or folder joins goes to Gemini (real imports). The dry run shows the locally stripped name.
+ */
+async function publicName(c: Candidate, res: Resolution | null, raw: string | null): Promise<string | null> {
+  const country = canonicalCountry(res?.country.name);
+  if (!raw) return country;
+  const det = stripFolderClutter(raw);
+  if (!det.needsAi && det.name && looksClean(det.name) && country && det.name.endsWith(country)) return det.name;
+  const ai = await askAi(c, res, raw);
+  if (ai?.name) return ai.name;
+  const name = det.name && looksClean(det.name) ? det.name : null;
+  return [name, country && !name?.endsWith(country) ? country : null].filter(Boolean).join(", ") || null;
 }
 
 const folderExifByDir = new Map<string, { file: ScanFile; exif: Exif; phone: boolean }[]>();
@@ -286,23 +345,40 @@ async function locate(c: Candidate, exif: Exif, filesByDir: Map<string, ScanFile
   const label = place.label && place.kind !== "flight" ? place.label : null;
   const nameFor = (spot: string | null) => placeLabel(spot, country, res && res.relIdx < relDepth(c.file.relDir) - 1 ? res.city : null);
 
-  // Tier 1: GPS in the JPG itself (or its original / raw)
+  // The country the GPS must fall in: the folders' country, or (ad-hoc trip names like "טיול לאמסטרדם") Gemini's
+  const expected = canonicalCountry(country?.name) ?? (await askAi(c, res, nameFor(label)))?.country ?? null;
+  // Older cameras (Nikon D7100, Canon S3 IS) wrote corrupted GPS: Keukenhof in Wyoming. Flight shots may be anywhere.
+  const valid = (lat: number, lng: number) => c.flight || !expected || inCountry(expected, lat, lng);
+  let rejected: string | null = null;
+
+  // Tier 1: GPS in the JPG itself (or its original / raw), if it lies in the expected country
   if (exif.lat != null && exif.lng != null) {
-    return { lat: exif.lat, lng: exif.lng, tier: "exif", name: nameFor(label), label, note: "EXIF GPS" };
+    if (valid(exif.lat, exif.lng)) return { lat: exif.lat, lng: exif.lng, tier: "exif", name: nameFor(label), label, country: expected, note: "EXIF GPS" };
+    rejected = `EXIF GPS ${exif.lat.toFixed(4)}, ${exif.lng.toFixed(4)} is outside ${expected}: discarded`;
   }
 
   // Tier 2 (priority 1 fallback): GPS from the same folder. A Nikon Z6 II file (THL_*) has none, but the Z7 II
   // files (DSC_*) next to it do: take the one whose capture time is closest. No timestamp (or none to compare)
-  // → the folder's median GPS.
-  const pool = await gpsPhotosInDir(c.file.relDir, filesByDir);
+  // → the folder's median GPS. Neighbours with corrupted GPS are left out.
+  const pool = (await gpsPhotosInDir(c.file.relDir, filesByDir)).filter((p) => valid(p.exif.lat!, p.exif.lng!));
+  const pre = rejected ? `${rejected}; ` : "";
   if (pool.length) {
     const t = exif.wall ? wallMs(exif.wall) : null;
     const timed = t == null ? [] : pool.filter((p) => p.exif.wall).map((p) => ({ p, dt: Math.abs(wallMs(p.exif.wall!) - t) })).sort((a, b) => a.dt - b.dt);
     if (timed.length) {
       const { p, dt } = timed[0];
-      return { lat: p.exif.lat!, lng: p.exif.lng!, tier: p.phone ? "phone" : "folder_exif_match", name: nameFor(label), label, note: `${p.phone ? "phone" : "folder EXIF"} ${p.file.name} (${Math.round(dt / 60000)} min)` };
+      return { lat: p.exif.lat!, lng: p.exif.lng!, tier: p.phone ? "phone" : "folder_exif_match", name: nameFor(label), label, country: expected, note: `${pre}${p.phone ? "phone" : "folder EXIF"} ${p.file.name} (${Math.round(dt / 60000)} min)` };
     }
-    return { lat: median(pool.map((p) => p.exif.lat!)), lng: median(pool.map((p) => p.exif.lng!)), tier: "folder_exif_match", name: nameFor(label), label, note: `folder median of ${pool.length} GPS photos (no timestamp)` };
+    return { lat: median(pool.map((p) => p.exif.lat!)), lng: median(pool.map((p) => p.exif.lng!)), tier: "folder_exif_match", name: nameFor(label), label, country: expected, note: `${pre}folder median of ${pool.length} GPS photos (no timestamp)` };
+  }
+
+  // Tier 3a: corrupted or missing GPS → Gemini landmark geocode of the folder's place (real imports; the dry run shows
+  // Mapbox). Gemini reads Hebrew / Russian folder words and trip names that the Mapbox text search cannot.
+  if (place.kind !== "flight") {
+    const ai = await askAi(c, res, nameFor(label));
+    if (ai?.lat != null && ai.lng != null && valid(ai.lat, ai.lng)) {
+      return { lat: ai.lat, lng: ai.lng, tier: "ai_geocoded", name: ai.name, label, country: expected ?? ai.country, note: `${pre}Gemini "${ai.name}"` };
+    }
   }
 
   // Tier 3: folder names → Mapbox (country-filtered, outlier-guarded), one lookup per subfolder
@@ -321,8 +397,13 @@ async function locate(c: Candidate, exif: Exif, filesByDir: Map<string, ScanFile
   }
   const { geo, q: used, fallback } = hit;
   if (!geo) return null;
+  // Mapbox without an ISO filter (ad-hoc trip "countries") once put Keukenhof in Wyoming: never save a pin outside the country
+  if (!valid(geo.lat, geo.lng)) {
+    hit.geo = null;
+    return null;
+  }
   const nm = place.kind === "flight" ? `${country.airport}` : fallback ? placeLabel(label, country, res.city) ?? used : used;
-  return { lat: geo.lat, lng: geo.lng, tier: "folder", name: nm, label, note: `Mapbox "${used}"${fallback ? " (outlier/none → city/country fallback)" : ""}` };
+  return { lat: geo.lat, lng: geo.lng, tier: "folder", name: nm, label, country: expected, note: `${pre}Mapbox "${used}"${fallback ? " (outlier/none → city/country fallback)" : ""}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +729,8 @@ async function main() {
   const st = await fs.stat(root).catch(() => null);
   if (!st?.isDirectory()) fail(`Not a folder: ${root}`);
   const tripName = path.basename(root);
+  tripRoot = tripName.normalize("NFC");
+  loadCountryPolygons();
   if (args.pruneFaces) return pruneFaces(args, tripName);
 
   console.log(`StoryMap archive import ${args.dryRun ? "(DRY RUN, nothing is uploaded)" : ""}`);
@@ -709,6 +792,10 @@ async function main() {
     db = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
     owner = await findOwner(db, args);
     existing = await loadExisting(db, owner);
+    if (!args.dryRun) {
+      const { error } = await db.from("photos").select("source_folder, country, gps_source").limit(1);
+      if (error) fail("The photos.source_folder / country / gps_source columns are missing: run supabase/migrations/012_photo_source_folder.sql in the Supabase SQL Editor first.");
+    }
   } else if (!args.dryRun) {
     fail("Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.local (Supabase → Project Settings → API → service_role).");
   } else {
@@ -722,7 +809,9 @@ async function main() {
   const stats = { new: 0, update: 0, unchanged: 0, skipped: 0, failed: 0, bytes: 0, faces: 0, faceUnknown: 0 };
   const faceFiles: string[] = [];
   const faceUnknownFiles: string[] = [];
-  const tierCount: Record<string, number> = { exif: 0, phone: 0, folder_exif_match: 0, folder: 0 };
+  const tierCount: Record<string, number> = { exif: 0, phone: 0, folder_exif_match: 0, folder: 0, ai_geocoded: 0 };
+  // Gemini cleans place names / geocodes corrupted GPS on real imports only (the dry run stays offline)
+  aiPlacesOn = !args.dryRun && Boolean(process.env.GEMINI_API_KEY);
   const photographer = process.env.EXTERNAL_DEFAULT_PHOTOGRAPHER || "Max Bihovskiy";
 
   let i = 0;
@@ -745,12 +834,14 @@ async function main() {
         continue;
       }
       tierCount[loc.tier]++;
+      const placeName = await publicName(cand, res, loc.name);
+      const sourceFolder = [tripRoot, cand.file.relDir].filter(Boolean).join("/");
 
       const buf = await fs.readFile(cand.file.abs); // read-only
       const fp = createHash("sha1").update(buf).digest("hex").slice(0, 10);
       const unchanged = ex && !args.force && ex.storage_path.includes(`_${fp}.jpg`);
       const action: Action = ex ? (unchanged ? "unchanged" : "update") : db ? "new" : "new?";
-      const row: Row = { cand, action, tier: loc.tier, place: loc.name ?? "", note: loc.note };
+      const row: Row = { cand, action, tier: loc.tier, place: placeName ?? "", note: loc.note };
       rows.push(row);
 
       if (action === "unchanged") {
@@ -776,7 +867,7 @@ async function main() {
         // Title / tags / face check BEFORE anything is uploaded
         let faces: boolean | null = false;
         if (args.ai) {
-          const r = await aiTitleTags(enc.thumb, taken.taken_at, loc.lat, loc.lng, loc.name, baseTags, !args.allowFaces);
+          const r = await aiTitleTags(enc.thumb, taken.taken_at, loc.lat, loc.lng, placeName, baseTags, !args.allowFaces);
           title = r.title;
           tags = r.tags;
           if (!args.allowFaces) faces = r.hasFaces;
@@ -816,7 +907,7 @@ async function main() {
 
       if (ex) {
         // Re-edit: swap the image files only. Likes, comments, title, tags and any manual location stay.
-        const patch: Record<string, unknown> = { storage_path: mainPath, photo_url: photoUrl, thumb_url: thumbUrl, width: enc.width, height: enc.height };
+        const patch: Record<string, unknown> = { storage_path: mainPath, photo_url: photoUrl, thumb_url: thumbUrl, width: enc.width, height: enc.height, source_folder: sourceFolder };
         if (exif.make) patch.camera_make = exif.make;
         if (exif.model) patch.camera_model = exif.model;
         if (exif.lens) patch.lens = exif.lens;
@@ -851,7 +942,10 @@ async function main() {
         latitude: loc.lat,
         longitude: loc.lng,
         is_manual_location: false,
-        location_name: loc.name,
+        location_name: placeName,
+        source_folder: sourceFolder,
+        country: loc.country,
+        gps_source: loc.tier,
         taken_at: taken.taken_at,
         taken_tz: taken.taken_tz,
         title,
@@ -907,7 +1001,7 @@ async function main() {
   }
   console.log(
     `\nDone: ${stats.new} ${args.dryRun ? "to import" : "imported"}, ${stats.update} ${args.dryRun ? "to update" : "updated"}, ${stats.unchanged} unchanged, ${stats.skipped} without a location, ${stats.failed} failed.` +
-      `  GPS tiers: EXIF ${tierCount.exif}, phone ${tierCount.phone}, folder-EXIF match ${tierCount.folder_exif_match}, folder name ${tierCount.folder}.` +
+      `  GPS tiers: EXIF ${tierCount.exif}, phone ${tierCount.phone}, folder-EXIF match ${tierCount.folder_exif_match}, folder name ${tierCount.folder}, AI geocoded (corrupted EXIF) ${tierCount.ai_geocoded}.` +
       (stats.bytes ? `  Uploaded ${(stats.bytes / 1048576).toFixed(1)} MB.` : ""),
   );
   if (stats.failed) process.exitCode = 1;

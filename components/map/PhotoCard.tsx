@@ -19,6 +19,8 @@ import GpsInlineEditor from "./GpsInlineEditor";
 import ReportButton from "./ReportButton";
 import { streetViewUrl } from "@/lib/walk";
 import ContentLabRow from "./ContentLabRow";
+import { useRoutesStore } from "@/store/routesStore";
+import { useSourceFolder } from "@/hooks/useSourceFolder";
 
 function exposureLine(p: Photo): string {
   return [
@@ -113,6 +115,9 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
   const commentsFor = useMapStore((s) => s.commentsFor);
   const openComments = useMapStore((s) => s.openComments);
   const isOwner = Boolean(currentUserId && currentUserId === photo.user_id);
+  const isAdmin = useRoutesStore((s) => s.isAdmin);
+  // Original archive folder name: owner / admin only (enforced by the photo_source_folders RPC, migration 013)
+  const sourceFolder = useSourceFolder(photo.id, currentUserId, isOwner || isAdmin);
 
   const stack = stackProp?.length ? stackProp : [photo];
   const solar = getSolarPhase(photo.taken_at, photo.latitude, photo.longitude);
@@ -343,6 +348,16 @@ export default function PhotoCard({ photo, stack: stackProp, onClose }: Props) {
             )}
             {tipTitle && <p className="mb-1 font-semibold text-white">{tipTitle}</p>}
             {body && <p className="whitespace-pre-line">{body}</p>}
+          </div>
+        )}
+
+        {/* Original folder name from the archive import: only the owner / an admin ever receive it */}
+        {sourceFolder && (
+          <div className="flex items-start gap-1 text-xs text-neutral-400" title="Original folder name. Only you can see this (owner / admin).">
+            <span aria-hidden className="text-neutral-500">📁</span>
+            <span className="text-neutral-500">Folder</span>
+            <span className="min-w-0 break-words text-neutral-300" dir="auto">{sourceFolder}</span>
+            <span className="ms-auto shrink-0 rounded bg-white/5 px-1 text-[9px] uppercase tracking-wide text-neutral-500">{isOwner ? "Only you" : "Admin"}</span>
           </div>
         )}
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMap } from "react-map-gl";
 import { getSupabase } from "@/lib/supabase/client";
+import { PUBLIC_PHOTO_COLUMNS } from "@/lib/photoColumns";
 import { useMapStore } from "@/store/mapStore";
 import { destination, formatClock } from "@/lib/sunMoon";
 import { WALK_STAGES, buildWalk, radiusBox, type WalkStop } from "@/lib/walk";
@@ -37,13 +38,13 @@ export default function NearbyWalkPanel() {
     setLoading(true);
     setError(null);
     const { south, north, west, east } = radiusBox(origin.latitude, origin.longitude, radiusKm);
-    let q = getSupabase().from("photos").select("*").gte("latitude", south).lte("latitude", north).limit(500);
+    let q = getSupabase().from("photos").select(PUBLIC_PHOTO_COLUMNS).gte("latitude", south).lte("latitude", north).limit(500);
     q = west >= -180 && east <= 180 ? q.gte("longitude", west).lte("longitude", east) : q;
     q.then(({ data, error }) => {
       if (!alive) return;
       setLoading(false);
       if (error) return setError(error.message);
-      setCandidates((data ?? []) as Photo[]);
+      setCandidates((data ?? []) as unknown as Photo[]);
     });
     return () => {
       alive = false;

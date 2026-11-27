@@ -1,4 +1,5 @@
 import { getSupabase, PHOTOS_BUCKET } from "@/lib/supabase/client";
+import { PUBLIC_PHOTO_COLUMNS } from "@/lib/photoColumns";
 import type { ExtractedExif, Photo, PhotoInsert } from "@/types/photo";
 import { fitLegacyLimit, LEGACY_BUCKET_LIMIT_MB, type CompressedImage } from "@/lib/compress";
 
@@ -74,10 +75,10 @@ export async function uploadPhoto(
     ...fields,
   };
 
-  const { data, error } = await supabase.from("photos").insert(row).select().single();
+  const { data, error } = await supabase.from("photos").insert(row).select(PUBLIC_PHOTO_COLUMNS).single();
   if (error) {
     await bucket.remove([storagePath, thumbPath]);
     throw new Error(`Saving to the database failed: ${error.message}`);
   }
-  return data as Photo;
+  return data as unknown as Photo;
 }

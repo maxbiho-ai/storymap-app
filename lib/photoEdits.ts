@@ -1,6 +1,7 @@
 "use client";
 
 import { getSupabase } from "@/lib/supabase/client";
+import { PUBLIC_PHOTO_COLUMNS } from "@/lib/photoColumns";
 import { useMapStore } from "@/store/mapStore";
 import type { Photo } from "@/types/photo";
 
@@ -14,12 +15,12 @@ export type OwnerPatch = Partial<Pick<Photo, "location_name" | "latitude" | "lon
 export async function updateOwnPhoto(id: string, patch: OwnerPatch): Promise<Photo> {
   patch = cleanPatch(patch);
 
-  const { data, error } = await getSupabase().from("photos").update(patch).eq("id", id).select("*").maybeSingle();
+  const { data, error } = await getSupabase().from("photos").update(patch).eq("id", id).select(PUBLIC_PHOTO_COLUMNS).maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) throw new Error("You can only edit your own photos (are you still signed in?)");
 
   useMapStore.getState().applyEdit(id, patch);
-  return data as Photo;
+  return data as unknown as Photo;
 }
 
 /** The same edit on several photos at once (RLS only lets the owner's rows through); returns the ids that changed */
